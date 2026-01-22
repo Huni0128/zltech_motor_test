@@ -1,459 +1,619 @@
 import sys
 import time
+import atexit
 from dataclasses import dataclass
-from typing import Tuple
 
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtWidgets, QtGui
 from pymodbus.client import ModbusSerialClient
 
 # -----------------------
-# ZLAC8030D Modbus Map (per RS485 manual)
+# ZLAC8030D Modbus Map
 # -----------------------
 class REG:
-    CONTROL_MODE = 0x200D           # 1:Pos(Rel), 2:Pos(Abs), 3:Vel, 4:Torque
-    CONTROL_WORD = 0x200E           # 0x05 estop, 0x06 clear, 0x07 stop, 0x08 enable, 0x10/0x11/0x12 start
-    SYNC_ASYNC  = 0x200F            # 0: sync, 1: async (position mode only)
-    EEPROM_STORE = 0x2010           # 1 -> store RW regs to EEPROM
-
-    # Common accel/dec fields (used in Velocity/Position modes)
-    ACC_L = 0x2080
-    ACC_R = 0x2081
-    DEC_L = 0x2082
-    DEC_R = 0x2083
-
-    # -------- Velocity mode --------
-    TARGET_VEL_L = 0x2088           # I16, rpm
-    TARGET_VEL_R = 0x2089
-    ACT_VEL_L = 0x20AB              # I16, 0.1 rpm
-    ACT_VEL_R = 0x20AC
-
-    # -------- Position mode --------
-    TPOS_H_L = 0x208A               # I16 high, low (Left)
-    TPOS_L_L = 0x208B
-    TPOS_H_R = 0x208C               # (Right)
-    TPOS_L_R = 0x208D
-    TSPD_L = 0x208E                 # U16 1~1000 rpm (Left)
-    TSPD_R = 0x208F                 # U16 1~1000 rpm (Right)
-    APOS_H_L = 0x20A7               # I16 feedback position high/low (Left)
-    APOS_L_L = 0x20A8
-    APOS_H_R = 0x20A9               # (Right)
-    APOS_L_R = 0x20AA
-
-    # -------- Torque mode --------
-    TSLOPE_L = 0x2086               # U16 torque slope mA/s
-    TSLOPE_R = 0x2087
-    TTORQUE_L = 0x2090              # I16 target torque mA (-30000~30000)
-    TTORQUE_R = 0x2091
-    ATORQUE_L = 0x20AD              # I16 actual 0.1A (-300~300)
-    ATORQUE_R = 0x20AE
-
-
-def i16(value: int) -> int:
-    value = max(-32768, min(32767, int(value)))
-    return value & 0xFFFF
-
-
-def u16(value: int) -> int:
-    value = max(0, min(65535, int(value)))
-    return value & 0xFFFF
-
+    CONTROL_MODE = 0x200D
+    CONTROL_WORD = 0x200E
+    SYNC_ASYNC   = 0x200F
+    
+    ACC_L = 0x2080; ACC_R = 0x2081
+    DEC_L = 0x2082; DEC_R = 0x2083
+    TARGET_VEL_L = 0x2088; TARGET_VEL_R = 0x2089
+    ACT_VEL_L    = 0x20AB; ACT_VEL_R    = 0x20AC
+    TPOS_H_L = 0x208A; TPOS_L_L = 0x208B
+    TPOS_H_R = 0x208C; TPOS_L_R = 0x208D
+    TSPD_L   = 0x208E; TSPD_R   = 0x208F
+    APOS_H_L = 0x20A7; APOS_L_L = 0x20A8
+    APOS_H_R = 0x20A9; APOS_L_R = 0x20AA
+    TSLOPE_L = 0x2086; TSLOPE_R = 0x2087
+    TTORQUE_L= 0x2090; TTORQUE_R= 0x2091
+    ATORQUE_L= 0x20AD; ATORQUE_R= 0x20AE
+    SET_ZERO = 0x2006
+    
+    # [안전장치] 통신 타임아웃 설정 레지스터 (0x2014 or similar depending on FW)
+    # PC가 죽으면 드라이버가 알아서 멈추게 하는 핵심 설정
+    COM_TIMEOUT = 0x2014 
 
 @dataclass
 class SerialCfg:
-    port: str = "COM7"
+    port: str = "COM3"
     baudrate: int = 115200
     slave: int = 1
-    parity: str = "N"
-    stopbits: int = 1
 
+# -----------------------
+# [UI] 바퀴 시각화
+# -----------------------
+class WheelWidget(QtWidgets.QWidget):
+    def __init__(self, label="L"):
+        super().__init__()
+        self.setMinimumSize(80, 120)
+        self.total_counts = 0
+        self.label = label
+        self.color = QtGui.QColor(60, 100, 200) if label == "L" else QtGui.QColor(200, 60, 60)
 
-class ZLAC8030D:
-    def __init__(self, cfg: SerialCfg):
-        self.cfg = cfg
-        self.client = ModbusSerialClient(
-            port=cfg.port, baudrate=cfg.baudrate, bytesize=8,
-            parity=cfg.parity, stopbits=cfg.stopbits, timeout=0.2, method="rtu"
-        )
-        self.slave = cfg.slave
+    def set_position(self, counts):
+        self.total_counts = counts
+        self.update()
 
-    # --- transport ---
-    def connect(self) -> bool:
-        return self.client.connect()
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        rect = QtCore.QRectF(10, 10, w-20, h-20)
 
-    def close(self):
-        self.client.close()
+        path = QtGui.QPainterPath()
+        path.addRoundedRect(rect, 10, 10)
+        path.setFillRule(QtCore.Qt.WindingFill)
+        
+        painter.setBrush(QtGui.QBrush(self.color))
+        painter.setPen(QtGui.QPen(QtCore.Qt.black, 2))
+        painter.drawPath(path)
 
-    # --- low-level RW ---
-    def r(self, addr: int, n: int = 1):
-        rr = self.client.read_holding_registers(addr, n, slave=self.slave)
-        if rr.isError():
-            raise RuntimeError(str(rr))
-        return rr.registers if n > 1 else rr.registers[0]
+        offset = -(self.total_counts / 20.0) % 30
+        painter.setClipPath(path)
+        painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 100), 4))
+        
+        for i in range(-1, int(h/30) + 2):
+            y = i * 30 + offset
+            painter.drawLine(QtCore.QPointF(10, y), QtCore.QPointF(w-10, y))
 
-    def w(self, addr: int, val: int):
-        wr = self.client.write_register(addr, val & 0xFFFF, slave=self.slave)
-        if wr.isError():
-            raise RuntimeError(str(wr))
+        painter.setClipping(False)
+        painter.setPen(QtCore.Qt.black)
+        painter.setFont(QtGui.QFont("Arial", 12, QtGui.QFont.Bold))
+        painter.drawText(rect, QtCore.Qt.AlignCenter, self.label)
 
-    def w_multi(self, addr: int, vals):
-        wr = self.client.write_registers(addr, [v & 0xFFFF for v in vals], slave=self.slave)
-        if wr.isError():
-            raise RuntimeError(str(wr))
+# -----------------------
+# [UI] 키보드 상태
+# -----------------------
+class KeyPadWidget(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setMinimumSize(140, 100)
+        self.keys = {'up': False, 'down': False, 'left': False, 'right': False}
 
-    # --- helpers ---
-    def clear_fault(self):
-        self.w(REG.CONTROL_WORD, 0x06)
+    def set_key_state(self, key, state):
+        if key in self.keys:
+            self.keys[key] = state
+            self.update()
 
-    def stop(self):
-        self.w(REG.CONTROL_WORD, 0x07)
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        layout = {'up':(50,5,40,40), 'left':(5,50,40,40), 'down':(50,50,40,40), 'right':(95,50,40,40)}
+        painter.setPen(QtGui.QPen(QtCore.Qt.black, 2))
+        font = QtGui.QFont("Arial", 12, QtGui.QFont.Bold); painter.setFont(font)
 
-    def estop(self):
-        self.w(REG.CONTROL_WORD, 0x05)
+        for key, (x, y, w, h) in layout.items():
+            rect = QtCore.QRectF(x, y, w, h)
+            color = QtGui.QColor(0, 150, 255) if self.keys[key] else QtGui.QColor(220, 220, 220)
+            painter.setBrush(color); painter.drawRoundedRect(rect, 5, 5)
+            symbol = {'up': '▲', 'down': '▼', 'left': '◀', 'right': '▶'}[key]
+            painter.setPen(QtCore.Qt.white if self.keys[key] else QtCore.Qt.black)
+            painter.drawText(rect, QtCore.Qt.AlignCenter, symbol)
 
-    def enable(self):
-        self.w(REG.CONTROL_WORD, 0x08)
+# -----------------------
+# [UI] 가상 조이스틱
+# -----------------------
+class VirtualJoystick(QtWidgets.QWidget):
+    sig_speed = QtCore.pyqtSignal(int, int)
 
-    def set_mode_velocity(self, acc_ms=500, dec_ms=500):
-        self.w(REG.CONTROL_MODE, 3)
-        self.w(REG.ACC_L, u16(acc_ms)); self.w(REG.ACC_R, u16(acc_ms))
-        self.w(REG.DEC_L, u16(dec_ms)); self.w(REG.DEC_R, u16(dec_ms))
+    def __init__(self):
+        super().__init__()
+        self.setMinimumSize(200, 200)
+        self.moving = False 
+        self.pos_x = 0.0; self.pos_y = 0.0
+        self.key_x = 0.0; self.key_y = 0.0
+        self.max_rpm = 50
+        self.snap_threshold = 0.2
+        self.current_l = 0.0; self.current_r = 0.0
+        self.ramp_step = 5.0
+        self.timer = QtCore.QTimer(); self.timer.timeout.connect(self.emit_speed); self.timer.start(100) 
 
-    def set_mode_torque(self, slope_ma_per_s=500):
-        self.w(REG.CONTROL_MODE, 4)
-        self.w(REG.TSLOPE_L, u16(slope_ma_per_s))
-        self.w(REG.TSLOPE_R, u16(slope_ma_per_s))
+    def set_max_rpm(self, val): self.max_rpm = val
+    
+    def update_keys(self, u, d, l, r):
+        self.key_y = 0.0; self.key_x = 0.0
+        if u: self.key_y += 1.0
+        if d: self.key_y -= 1.0
+        if r: self.key_x += 1.0
+        if l: self.key_x -= 1.0
+        self.key_x = max(-1.0, min(1.0, self.key_x))
+        self.key_y = max(-1.0, min(1.0, self.key_y))
 
-    def set_mode_position(self, relative=True, acc_ms=500, dec_ms=500, sync=False):
-        self.w(REG.SYNC_ASYNC, 0 if sync else 1)
-        self.w(REG.CONTROL_MODE, 1 if relative else 2)
-        self.w(REG.ACC_L, u16(acc_ms)); self.w(REG.ACC_R, u16(acc_ms))
-        self.w(REG.DEC_L, u16(dec_ms)); self.w(REG.DEC_R, u16(dec_ms))
+    def stop_immediate(self):
+        self.current_l = 0; self.current_r = 0; self.sig_speed.emit(0, 0)
 
-    # ---- Velocity ----
-    def set_target_velocity(self, left_rpm: int, right_rpm: int, sync=True):
-        l = max(-3000, min(3000, int(left_rpm)))
-        r = max(-3000, min(3000, int(right_rpm)))
-        if sync:
-            self.w_multi(REG.TARGET_VEL_L, [i16(l), i16(r)])
-        else:
-            self.w(REG.TARGET_VEL_L, i16(l)); self.w(REG.TARGET_VEL_R, i16(r))
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        center = QtCore.QPointF(w/2, h/2); radius = min(w, h) / 2 - 10
+        
+        painter.setBrush(QtGui.QColor(50, 50, 50))
+        painter.drawEllipse(center, radius, radius)
+        painter.setPen(QtGui.QPen(QtCore.Qt.gray, 1, QtCore.Qt.DashLine))
+        painter.drawLine(center.x()-radius, center.y(), center.x()+radius, center.y())
+        painter.drawLine(center.x(), center.y()-radius, center.x(), center.y()+radius)
 
-    def read_actual_velocity(self) -> Tuple[float, float]:
-        def s16(u):
-            return u - 0x10000 if u & 0x8000 else u
-        vl = s16(self.r(REG.ACT_VEL_L)) / 10.0
-        vr = s16(self.r(REG.ACT_VEL_R)) / 10.0
-        return vl, vr
+        curr_x = self.pos_x if self.moving else self.key_x
+        curr_y = self.pos_y if self.moving else self.key_y
+        if abs(curr_x) < self.snap_threshold: curr_x = 0
+        if abs(curr_y) < self.snap_threshold: curr_y = 0
 
-    # ---- Torque ----
-    def set_target_torque(self, left_ma: int, right_ma: int, sync=True):
-        l = max(-30000, min(30000, int(left_ma)))
-        r = max(-30000, min(30000, int(right_ma)))
-        if sync:
-            self.w_multi(REG.TTORQUE_L, [i16(l), i16(r)])
-        else:
-            self.w(REG.TTORQUE_L, i16(l)); self.w(REG.TTORQUE_R, i16(r))
+        draw_y = -curr_y 
+        handle_center = QtCore.QPointF(center.x() + curr_x * radius, center.y() + draw_y * radius)
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QColor(50, 200, 50) if (curr_x == 0 or curr_y == 0) else QtGui.QColor(200, 50, 50))
+        painter.drawEllipse(handle_center, 30, 30)
 
-    def read_actual_torque(self) -> Tuple[float, float]:
-        def s16(u):
-            return u - 0x10000 if u & 0x8000 else u
-        tl = s16(self.r(REG.ATORQUE_L)) / 10.0  # 0.1A
-        tr = s16(self.r(REG.ATORQUE_R)) / 10.0
-        return tl, tr
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton: self.moving = True; self.update_position(event.pos())
+    def mouseMoveEvent(self, event):
+        if self.moving: self.update_position(event.pos())
+    def mouseReleaseEvent(self, event):
+        self.moving = False; self.pos_x = 0.0; self.pos_y = 0.0; self.update()
 
-    # ---- Position ----
-    def set_target_position_pulses(self, left_counts: int, right_counts: int, sync=True):
-        # counts are 32-bit signed; driver expects split into two I16 (high, low)
-        def split32(val: int):
-            # clamp to signed 31-bit usable range per manual
-            val = max(-(1<<31)+1, min((1<<31)-1, int(val)))
-            if val < 0:
-                val = (1<<32) + val
-            hi = (val >> 16) & 0xFFFF
-            lo = val & 0xFFFF
-            return hi, lo
-        lhi, llo = split32(left_counts)
-        rhi, rlo = split32(right_counts)
-        if sync:
-            # left hi/lo then right hi/lo (contiguous addresses 0x208A~0x208D)
-            self.w_multi(REG.TPOS_H_L, [lhi, llo, rhi, rlo])
-        else:
-            self.w_multi(REG.TPOS_H_L, [lhi, llo])
-            self.w_multi(REG.TPOS_H_R, [rhi, rlo])
+    def update_position(self, mouse_pos):
+        w, h = self.width(), self.height()
+        center_x, center_y = w / 2, h / 2
+        radius = min(w, h) / 2 - 10
+        dx = mouse_pos.x() - center_x; dy = mouse_pos.y() - center_y
+        dist = math.sqrt(dx*dx + dy*dy)
+        if dist > radius: ratio = radius / dist; dx *= ratio; dy *= ratio
+        self.pos_x = dx / radius; self.pos_y = -dy / radius; self.update()
 
-    def set_position_target_speed(self, left_rpm: int, right_rpm: int):
-        self.w(REG.TSPD_L, u16(left_rpm))
-        self.w(REG.TSPD_R, u16(right_rpm))
+    def emit_speed(self):
+        raw_x = self.pos_x if self.moving else self.key_x
+        raw_y = self.pos_y if self.moving else self.key_y
+        if abs(raw_x) < self.snap_threshold: raw_x = 0 
+        if abs(raw_y) < self.snap_threshold: raw_y = 0 
 
-    def start_position(self, which: str = "sync"):
-        if which == "left":
-            self.w(REG.CONTROL_WORD, 0x11)
-        elif which == "right":
-            self.w(REG.CONTROL_WORD, 0x12)
-        else:
-            self.w(REG.CONTROL_WORD, 0x10)  # synchronous start
+        if not self.moving and raw_x == 0 and raw_y == 0:
+            if abs(self.current_l) < 1 and abs(self.current_r) < 1:
+                self.current_l = 0; self.current_r = 0; self.sig_speed.emit(0, 0); self.update(); return
 
-    def read_actual_position(self) -> Tuple[int, int]:
-        def s32_from_hi_lo(hi, lo):
-            v = ((hi & 0xFFFF) << 16) | (lo & 0xFFFF)
-            if v & 0x80000000:
-                v -= 0x100000000
-            return v
-        lhi = self.r(REG.APOS_H_L)
-        llo = self.r(REG.APOS_L_L)
-        rhi = self.r(REG.APOS_H_R)
-        rlo = self.r(REG.APOS_L_R)
-        return s32_from_hi_lo(lhi, llo), s32_from_hi_lo(rhi, rlo)
+        throttle = raw_y * self.max_rpm
+        turn = raw_x * self.max_rpm * 0.5 
+        target_l = throttle + turn; target_r = throttle - turn 
+
+        def ramp(curr, target, step):
+            if curr < target:
+                curr += step; 
+                if curr > target: curr = target
+            elif curr > target:
+                curr -= step
+                if curr < target: curr = target
+            return curr
+
+        self.current_l = ramp(self.current_l, target_l, self.ramp_step)
+        self.current_r = ramp(self.current_r, target_r, self.ramp_step)
+        self.sig_speed.emit(int(self.current_l), int(self.current_r)); self.update()
 
 
 # -----------------------
-# GUI
+# 통신 워커
+# -----------------------
+class MotorWorker(QtCore.QThread):
+    sig_status = QtCore.pyqtSignal(str)
+    sig_feedback = QtCore.pyqtSignal(dict)
+    sig_error = QtCore.pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.cfg = SerialCfg()
+        self.client = None
+        self.running = False
+        self.is_connected = False
+        self.cmd_queue = []
+        self.mutex = QtCore.QMutex()
+
+    def connect_serial(self, port, baud, slave):
+        self.cfg.port = port; self.cfg.baudrate = baud; self.cfg.slave = slave; self.start()
+
+    def disconnect_serial(self):
+        self.running = False; self.wait()
+        if self.client: self.client.close(); self.is_connected = False; self.sig_status.emit("Disconnected")
+
+    def queue_command(self, func, *args, **kwargs):
+        self.mutex.lock(); self.cmd_queue.append((func, args, kwargs)); self.mutex.unlock()
+
+    def run(self):
+        self.running = True
+        try:
+            self.client = ModbusSerialClient(port=self.cfg.port, baudrate=self.cfg.baudrate, parity='N', stopbits=1, bytesize=8, timeout=0.1)
+            if self.client.connect(): 
+                self.is_connected = True; 
+                self.sig_status.emit(f"Connected to {self.cfg.port}")
+                
+                # [중요 안전장치] 연결 즉시 Heartbeat(Watchdog) 설정
+                # 500ms(0.5초) 동안 통신 없으면 드라이버가 스스로 멈춤
+                self._write(REG.COM_TIMEOUT, 500) 
+                self.sig_status.emit("Safety Watchdog Enabled (500ms)")
+                
+            else: self.sig_status.emit("Connection Failed"); self.running = False; return
+        except Exception as e: self.sig_error.emit(str(e)); self.running = False; return
+
+        while self.running:
+            self.mutex.lock()
+            while self.cmd_queue:
+                func, args, kwargs = self.cmd_queue.pop(0)
+                try: func(*args, **kwargs)
+                except Exception as e: self.sig_error.emit(f"CMD Error: {e}")
+            self.mutex.unlock()
+            try: 
+                if self.is_connected: self._read_status()
+            except Exception: pass
+            self.msleep(100)
+
+    def _write(self, addr, val):
+        self.client.write_register(addr, int(val) & 0xFFFF, slave=self.cfg.slave)
+
+    def _write_multi(self, addr, vals):
+        self.client.write_registers(addr, [int(v) & 0xFFFF for v in vals], slave=self.cfg.slave)
+
+    def _s16(self, val): return val - 0x10000 if val & 0x8000 else val
+    def _s32(self, high, low): 
+        val = (high << 16) | low
+        return val - 0x100000000 if val & 0x80000000 else val
+
+    def _read_status(self):
+        fb = {}
+        slave = self.cfg.slave
+        # 통신 에러가 나도 죽지 않게 예외처리 강화
+        try:
+            rr = self.client.read_holding_registers(REG.ACT_VEL_L, 2, slave=slave)
+            if not rr.isError(): fb['vl'] = self._s16(rr.registers[0]) / 10.0; fb['vr'] = self._s16(rr.registers[1]) / 10.0
+            rr = self.client.read_holding_registers(REG.APOS_H_L, 4, slave=slave)
+            if not rr.isError(): fb['pl'] = self._s32(rr.registers[0], rr.registers[1]); fb['pr'] = self._s32(rr.registers[2], rr.registers[3])
+            rr = self.client.read_holding_registers(REG.ATORQUE_L, 2, slave=slave)
+            if not rr.isError(): fb['tl'] = self._s16(rr.registers[0]) / 10.0; fb['tr'] = self._s16(rr.registers[1]) / 10.0
+            self.sig_feedback.emit(fb)
+        except:
+            pass # 읽기 에러는 무시 (쓰기는 큐에서 처리)
+
+    def cmd_enable(self, enable: bool): self._write(REG.CONTROL_WORD, 0x08 if enable else 0x07)
+    def cmd_clear_fault(self): self._write(REG.CONTROL_WORD, 0x06)
+
+    def _safe_change_mode(self, mode, sync_val=1):
+        self._write(REG.CONTROL_WORD, 0x07); self.msleep(50)
+        self._write(REG.CONTROL_WORD, 0x00); self.msleep(100)
+        self._write(REG.CONTROL_MODE, mode); self._write(REG.SYNC_ASYNC, sync_val); self.msleep(100)
+        self._write(REG.CONTROL_WORD, 0x08)
+
+    def cmd_set_mode_vel(self, acc, dec):
+        self._safe_change_mode(3, 1)
+        self._write(REG.ACC_L, acc); self._write(REG.ACC_R, acc)
+        self._write(REG.DEC_L, dec); self._write(REG.DEC_R, dec)
+
+    def cmd_write_vel(self, vl, vr):
+        self._write(REG.TARGET_VEL_L, int(vl)); self._write(REG.TARGET_VEL_R, int(vr))
+
+    def cmd_set_mode_pos(self, absolute_mode, acc, dec):
+        self._safe_change_mode(2 if absolute_mode else 1, 1)
+        self._write(REG.ACC_L, acc); self._write(REG.ACC_R, acc)
+        self._write(REG.DEC_L, dec); self._write(REG.DEC_R, dec)
+
+    def cmd_write_pos_and_start(self, pl, pr, speed_l, speed_r):
+        self._write(REG.TSPD_L, int(speed_l)); self._write(REG.TSPD_R, int(speed_r))
+        def split(v): v = int(v); return ((v >> 16) & 0xFFFF, v & 0xFFFF) if v >= 0 else (((v + (1<<32)) >> 16) & 0xFFFF, (v + (1<<32)) & 0xFFFF)
+        l_hi, l_lo = split(pl); r_hi, r_lo = split(pr)
+        self._write_multi(REG.TPOS_H_L, [l_hi, l_lo, r_hi, r_lo])
+        self.msleep(50); self._write(REG.CONTROL_WORD, 0x10) 
+    
+    def cmd_set_zero(self): self._write(REG.SET_ZERO, 3)
+
+    def cmd_set_mode_torque(self, slope):
+        self._write(REG.CONTROL_WORD, 0x07); self.msleep(50)
+        self._write(REG.TTORQUE_L, 0); self._write(REG.TTORQUE_R, 0) 
+        self._safe_change_mode(4, 1)
+        self._write(REG.TSLOPE_L, slope); self._write(REG.TSLOPE_R, slope)
+
+    def cmd_write_torque(self, tl, tr):
+        self._write(REG.TTORQUE_L, int(tl)); self._write(REG.TTORQUE_R, int(tr))
+
+
+# -----------------------
+# GUI Main Window
 # -----------------------
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ZLAC8030D PyQt Controller")
-        self.resize(960, 620)
+        self.setWindowTitle("ZLAC8030D Pro Controller V18 (Safety Watchdog)")
+        self.resize(950, 850)
+        
+        self.worker = MotorWorker()
+        self.worker.sig_status.connect(self.on_status)
+        self.worker.sig_feedback.connect(self.update_feedback)
+        self.worker.sig_error.connect(lambda e: self.lblStatus.setText(f"Error: {e}"))
 
-        self.cfg = SerialCfg()
-        self.dev: ZLAC8030D | None = None
+        self.init_ui()
+        self.setFocusPolicy(QtCore.Qt.StrongFocus)
+        
+        # [안전] 프로그램 종료 시 정지 신호 전송 시도
+        atexit.register(self.emergency_stop)
 
-        central = QtWidgets.QWidget()
-        self.setCentralWidget(central)
+    def emergency_stop(self):
+        # 파이썬 종료 시 최대한 정지 시도
+        if self.worker.is_connected:
+            try:
+                self.worker.cmd_enable(False)
+            except:
+                pass
+
+    def init_ui(self):
+        central = QtWidgets.QWidget(); self.setCentralWidget(central)
         layout = QtWidgets.QVBoxLayout(central)
 
-        # Connection panel
-        conn = QtWidgets.QHBoxLayout()
-        layout.addLayout(conn)
-        self.portEdit = QtWidgets.QLineEdit(self.cfg.port); conn.addWidget(QtWidgets.QLabel("Port")); conn.addWidget(self.portEdit)
-        self.baudCombo = QtWidgets.QComboBox(); self.baudCombo.addItems(["128000","115200","57600","38400","19200","9600"]); self.baudCombo.setCurrentText(str(self.cfg.baudrate)); conn.addWidget(QtWidgets.QLabel("Baud")); conn.addWidget(self.baudCombo)
-        self.slaveSpin = QtWidgets.QSpinBox(); self.slaveSpin.setRange(1,127); self.slaveSpin.setValue(self.cfg.slave); conn.addWidget(QtWidgets.QLabel("Slave")); conn.addWidget(self.slaveSpin)
-        self.btnConnect = QtWidgets.QPushButton("Connect"); conn.addWidget(self.btnConnect)
-        self.btnDisconnect = QtWidgets.QPushButton("Disconnect"); conn.addWidget(self.btnDisconnect)
-        self.lblStatus = QtWidgets.QLabel("disconnected"); conn.addWidget(self.lblStatus)
+        # 1. Connection
+        h = QtWidgets.QHBoxLayout()
+        self.portEdit = QtWidgets.QLineEdit("COM3"); h.addWidget(QtWidgets.QLabel("Port")); h.addWidget(self.portEdit)
+        self.baudCombo = QtWidgets.QComboBox(); self.baudCombo.addItems(["115200", "57600", "38400", "9600"]); h.addWidget(QtWidgets.QLabel("Baud")); h.addWidget(self.baudCombo)
+        self.btnConn = QtWidgets.QPushButton("Connect"); self.btnConn.clicked.connect(self.toggle_connect); h.addWidget(self.btnConn)
+        layout.addLayout(h)
 
-        # Control buttons
-        btns = QtWidgets.QHBoxLayout(); layout.addLayout(btns)
-        self.btnEnable = QtWidgets.QPushButton("Enable")
-        self.btnStop = QtWidgets.QPushButton("Stop")
-        self.btnClear = QtWidgets.QPushButton("Clear Fault")
-        self.btnEStop = QtWidgets.QPushButton("E-STOP")
-        btns.addWidget(self.btnEnable); btns.addWidget(self.btnStop); btns.addWidget(self.btnClear); btns.addWidget(self.btnEStop)
+        # 2. RUN / STOP
+        h_run = QtWidgets.QHBoxLayout()
+        self.btnRun = QtWidgets.QPushButton("RUN (Enable)"); self.btnRun.setMinimumHeight(50); self.btnRun.setCheckable(True); self.btnRun.setStyleSheet("QPushButton:checked { background-color: #00FF00; font-weight: bold; }"); self.btnRun.clicked.connect(self.on_run_clicked)
+        self.btnStop = QtWidgets.QPushButton("STOP (Disable)"); self.btnStop.setMinimumHeight(50); self.btnStop.setStyleSheet("background-color: #FF5555; font-weight: bold; color: white;"); self.btnStop.clicked.connect(self.on_stop_clicked)
+        self.btnClear = QtWidgets.QPushButton("Clear Alarm"); self.btnClear.setMinimumHeight(50); self.btnClear.clicked.connect(lambda: self.worker.queue_command(self.worker.cmd_clear_fault))
+        h_run.addWidget(self.btnRun); h_run.addWidget(self.btnStop); h_run.addWidget(self.btnClear)
+        layout.addLayout(h_run)
 
-        # Tabs
-        tabs = QtWidgets.QTabWidget(); layout.addWidget(tabs, 1)
-        tabs.addTab(self._build_velocity_tab(), "Velocity")
-        tabs.addTab(self._build_torque_tab(), "Torque")
-        tabs.addTab(self._build_position_tab(), "Position")
+        # 3. Global Settings Panel
+        grp_glob = QtWidgets.QGroupBox("Global Control Settings"); layout.addWidget(grp_glob)
+        h_glob = QtWidgets.QHBoxLayout(grp_glob)
+        self.chkSync = QtWidgets.QCheckBox("Sync (Input L -> R follows inverted)"); self.chkSync.setChecked(True); self.chkSync.setStyleSheet("font-weight: bold; color: blue;")
+        self.chkInvL = QtWidgets.QCheckBox("H/W Invert L"); self.chkInvR = QtWidgets.QCheckBox("H/W Invert R"); self.chkInvR.setChecked(True) 
+        h_glob.addWidget(self.chkSync); h_glob.addStretch(); h_glob.addWidget(self.chkInvL); h_glob.addWidget(self.chkInvR)
 
-        # signals
-        self.btnConnect.clicked.connect(self.on_connect)
-        self.btnDisconnect.clicked.connect(self.on_disconnect)
-        self.btnEnable.clicked.connect(lambda: self._safe(lambda: self.dev.enable()))
-        self.btnStop.clicked.connect(lambda: self._safe(lambda: self.dev.stop()))
-        self.btnClear.clicked.connect(lambda: self._safe(lambda: self.dev.clear_fault()))
-        self.btnEStop.clicked.connect(lambda: self._safe(lambda: self.dev.estop()))
+        # 4. Tabs
+        self.tabs = QtWidgets.QTabWidget()
+        self.tabs.addTab(self.ui_velocity(), "1. Velocity")
+        self.tabs.addTab(self.ui_position_rel(), "2. Relative Pos")
+        self.tabs.addTab(self.ui_position_abs(), "3. Absolute Pos")
+        self.tabs.addTab(self.ui_torque(), "4. Torque")
+        self.tabs.addTab(self.ui_graphic(), "5. Joy & Key")
+        layout.addWidget(self.tabs)
 
-        self.timer = QtCore.QTimer(self)
-        self.timer.setInterval(200)
-        self.timer.timeout.connect(self.on_poll)
+        fb_layout = QtWidgets.QHBoxLayout()
+        self.lblFbVel = QtWidgets.QLabel("Vel: 0.0 / 0.0 rpm"); self.lblFbPos = QtWidgets.QLabel("Pos: 0 / 0 cnt"); self.lblFbTq = QtWidgets.QLabel("Tq: 0.0 / 0.0 A")
+        font = self.lblFbVel.font(); font.setPointSize(10); font.setBold(True)
+        self.lblFbVel.setFont(font); self.lblFbPos.setFont(font); self.lblFbTq.setFont(font)
+        fb_layout.addWidget(self.lblFbVel); fb_layout.addWidget(self.lblFbPos); fb_layout.addWidget(self.lblFbTq)
+        layout.addLayout(fb_layout)
+        
+        self.lblStatus = QtWidgets.QLabel("Disconnected"); layout.addWidget(self.lblStatus)
 
-    # -------- tabs --------
-    def _build_velocity_tab(self):
-        w = QtWidgets.QWidget(); L = QtWidgets.QGridLayout(w)
-        self.velAcc = QtWidgets.QSpinBox(); self.velAcc.setRange(0,32767); self.velAcc.setValue(500)
-        self.velDec = QtWidgets.QSpinBox(); self.velDec.setRange(0,32767); self.velDec.setValue(500)
-        self.velL = QtWidgets.QSpinBox(); self.velL.setRange(-3000,3000);
-        self.velR = QtWidgets.QSpinBox(); self.velR.setRange(-3000,3000)
-        self.velSync = QtWidgets.QCheckBox("Sync write L/R"); self.velSync.setChecked(True)
-        self.btnVelInit = QtWidgets.QPushButton("Init Velocity Mode")
-        self.btnVelWrite = QtWidgets.QPushButton("Write Target RPM")
-        self.lblVelFb = QtWidgets.QLabel("fb: (0,0) rpm")
-
-        L.addWidget(QtWidgets.QLabel("Acc/Dec (ms)"),0,0)
-        L.addWidget(self.velAcc,0,1); L.addWidget(self.velDec,0,2)
-        L.addWidget(QtWidgets.QLabel("L/R target rpm"),1,0)
-        L.addWidget(self.velL,1,1); L.addWidget(self.velR,1,2)
-        L.addWidget(self.velSync,2,0)
-        L.addWidget(self.btnVelInit,2,1); L.addWidget(self.btnVelWrite,2,2)
-        L.addWidget(self.lblVelFb,3,0,1,3)
-
-        self.btnVelInit.clicked.connect(self.on_vel_init)
-        self.btnVelWrite.clicked.connect(self.on_vel_write)
+    # --- 1. Velocity ---
+    def ui_velocity(self):
+        w = QtWidgets.QWidget(); l = QtWidgets.QFormLayout(w)
+        self.vAcc = QtWidgets.QSpinBox(); self.vAcc.setRange(0,30000); self.vAcc.setValue(500)
+        self.vL = QtWidgets.QSpinBox(); self.vL.setRange(-3000,3000)
+        self.vR = QtWidgets.QSpinBox(); self.vR.setRange(-3000,3000)
+        self.vL.lineEdit().returnPressed.connect(self.send_velocity)
+        self.vR.lineEdit().returnPressed.connect(self.send_velocity)
+        
+        btnInit = QtWidgets.QPushButton("Set Velocity Mode (OK Button)")
+        btnInit.setStyleSheet("background-color: #DDDDFF; font-weight: bold;")
+        btnInit.clicked.connect(lambda: self.worker.queue_command(self.worker.cmd_set_mode_vel, self.vAcc.value(), self.vAcc.value()))
+        
+        l.addRow(btnInit); l.addRow("Acc(ms):", self.vAcc); l.addRow("Target L:", self.vL); l.addRow("Target R:", self.vR)
         return w
 
-    def _build_torque_tab(self):
-        w = QtWidgets.QWidget(); L = QtWidgets.QGridLayout(w)
-        self.tqSlope = QtWidgets.QSpinBox(); self.tqSlope.setRange(0, 60000); self.tqSlope.setValue(500)
-        self.tqL = QtWidgets.QSpinBox(); self.tqL.setRange(-30000,30000)
-        self.tqR = QtWidgets.QSpinBox(); self.tqR.setRange(-30000,30000)
-        self.tqSync = QtWidgets.QCheckBox("Sync write L/R"); self.tqSync.setChecked(True)
-        self.btnTqInit = QtWidgets.QPushButton("Init Torque Mode")
-        self.btnTqWrite = QtWidgets.QPushButton("Write Target Torque (mA)")
-        self.lblTqFb = QtWidgets.QLabel("fb: (0,0) A")
+    # --- [New] MM Conversion Helper ---
+    def convert_input(self, val_l, val_r, use_mm, scale):
+        if use_mm:
+            ratio = 1000.0 / scale
+            return int(val_l * ratio), int(val_r * ratio)
+        return int(val_l), int(val_r)
 
-        L.addWidget(QtWidgets.QLabel("Slope (mA/s)"),0,0); L.addWidget(self.tqSlope,0,1)
-        L.addWidget(QtWidgets.QLabel("L/R target torque (mA)"),1,0)
-        L.addWidget(self.tqL,1,1); L.addWidget(self.tqR,1,2)
-        L.addWidget(self.tqSync,2,0)
-        L.addWidget(self.btnTqInit,2,1); L.addWidget(self.btnTqWrite,2,2)
-        L.addWidget(self.lblTqFb,3,0,1,3)
+    # --- 2. Relative Position ---
+    def ui_position_rel(self):
+        w = QtWidgets.QWidget(); l = QtWidgets.QFormLayout(w)
+        h_unit = QtWidgets.QHBoxLayout()
+        self.prUseMM = QtWidgets.QCheckBox("Use MM Unit"); self.prUseMM.setStyleSheet("color: darkgreen; font-weight: bold;")
+        self.prScale = QtWidgets.QDoubleSpinBox(); self.prScale.setRange(1.0, 10000.0); self.prScale.setValue(180.0)
+        h_unit.addWidget(self.prUseMM); h_unit.addWidget(QtWidgets.QLabel("Dist(mm) for 1000p:")); h_unit.addWidget(self.prScale)
+        l.addRow(h_unit)
 
-        self.btnTqInit.clicked.connect(self.on_tq_init)
-        self.btnTqWrite.clicked.connect(self.on_tq_write)
+        self.prAcc = QtWidgets.QSpinBox(); self.prAcc.setRange(0,30000); self.prAcc.setValue(500)
+        self.prSpd = QtWidgets.QSpinBox(); self.prSpd.setRange(1, 3000); self.prSpd.setValue(20); self.prSpd.setSuffix(" rpm")
+        
+        self.prPosL = QtWidgets.QDoubleSpinBox(); self.prPosL.setRange(-2000000000, 2000000000); self.prPosL.setDecimals(1)
+        self.prPosR = QtWidgets.QDoubleSpinBox(); self.prPosR.setRange(-2000000000, 2000000000); self.prPosR.setDecimals(1)
+        self.prPosL.lineEdit().returnPressed.connect(lambda: self.send_position(False))
+        self.prPosR.lineEdit().returnPressed.connect(lambda: self.send_position(False))
+
+        btnInit = QtWidgets.QPushButton("Set Relative Mode (OK Button)")
+        btnInit.setStyleSheet("background-color: #DDDDFF; font-weight: bold;")
+        btnInit.clicked.connect(lambda: self.worker.queue_command(self.worker.cmd_set_mode_pos, False, self.prAcc.value(), self.prAcc.value())) 
+        btnGo = QtWidgets.QPushButton("Go Relative [Enter]")
+        btnGo.clicked.connect(lambda: self.send_position(False))
+
+        l.addRow(btnInit); l.addRow("Acc:", self.prAcc); l.addRow("Speed:", self.prSpd); l.addRow("Move L:", self.prPosL); l.addRow("Move R:", self.prPosR); l.addRow(btnGo)
         return w
 
-    def _build_position_tab(self):
-        w = QtWidgets.QWidget(); L = QtWidgets.QGridLayout(w)
-        # --- unit conversion inputs ---
-        self.mmPerRev = QtWidgets.QDoubleSpinBox(); self.mmPerRev.setDecimals(4); self.mmPerRev.setRange(0.0001, 100000); self.mmPerRev.setValue(100.0)
-        self.pulsesPerRev = QtWidgets.QSpinBox(); self.pulsesPerRev.setRange(1, 2000000); self.pulsesPerRev.setValue(4096)  # encoder_lines*quad*gear_ratio
-        self.gearRatio = QtWidgets.QDoubleSpinBox(); self.gearRatio.setDecimals(4); self.gearRatio.setRange(0.0001, 10000); self.gearRatio.setValue(1.0)
+    # --- 3. Absolute Position ---
+    def ui_position_abs(self):
+        w = QtWidgets.QWidget(); l = QtWidgets.QFormLayout(w)
+        h_unit = QtWidgets.QHBoxLayout()
+        self.paUseMM = QtWidgets.QCheckBox("Use MM Unit"); self.paUseMM.setStyleSheet("color: darkgreen; font-weight: bold;")
+        self.paScale = QtWidgets.QDoubleSpinBox(); self.paScale.setRange(1.0, 10000.0); self.paScale.setValue(180.0)
+        h_unit.addWidget(self.paUseMM); h_unit.addWidget(QtWidgets.QLabel("Dist(mm) for 1000p:")); h_unit.addWidget(self.paScale)
+        l.addRow(h_unit)
 
-        # position mode controls
-        self.posRelative = QtWidgets.QCheckBox("Relative mode (unchecked = Absolute)"); self.posRelative.setChecked(True)
-        self.posSync = QtWidgets.QCheckBox("Synchronous start"); self.posSync.setChecked(True)
-        self.posAcc = QtWidgets.QSpinBox(); self.posAcc.setRange(0,32767); self.posAcc.setValue(500)
-        self.posDec = QtWidgets.QSpinBox(); self.posDec.setRange(0,32767); self.posDec.setValue(500)
-        self.posSpeedL = QtWidgets.QSpinBox(); self.posSpeedL.setRange(1,1000); self.posSpeedL.setValue(120)
-        self.posSpeedR = QtWidgets.QSpinBox(); self.posSpeedR.setRange(1,1000); self.posSpeedR.setValue(120)
+        self.paAcc = QtWidgets.QSpinBox(); self.paAcc.setRange(0,30000); self.paAcc.setValue(500)
+        self.paSpd = QtWidgets.QSpinBox(); self.paSpd.setRange(1, 3000); self.paSpd.setValue(20); self.paSpd.setSuffix(" rpm")
+        
+        self.paPosL = QtWidgets.QDoubleSpinBox(); self.paPosL.setRange(-2000000000, 2000000000); self.paPosL.setDecimals(1)
+        self.paPosR = QtWidgets.QDoubleSpinBox(); self.paPosR.setRange(-2000000000, 2000000000); self.paPosR.setDecimals(1)
+        self.paPosL.lineEdit().returnPressed.connect(lambda: self.send_position(True))
+        self.paPosR.lineEdit().returnPressed.connect(lambda: self.send_position(True))
 
-        # target inputs in both counts and mm
-        self.posCountsL = QtWidgets.QSpinBox(); self.posCountsL.setRange(-2147483647, 2147483647)
-        self.posCountsR = QtWidgets.QSpinBox(); self.posCountsR.setRange(-2147483647, 2147483647)
-        self.posMmL = QtWidgets.QDoubleSpinBox(); self.posMmL.setDecimals(3); self.posMmL.setRange(-1e9, 1e9)
-        self.posMmR = QtWidgets.QDoubleSpinBox(); self.posMmR.setDecimals(3); self.posMmR.setRange(-1e9, 1e9)
+        btnInit = QtWidgets.QPushButton("Set Absolute Mode (OK Button)")
+        btnInit.setStyleSheet("background-color: #FFDDDD; font-weight: bold;")
+        btnInit.clicked.connect(lambda: self.worker.queue_command(self.worker.cmd_set_mode_pos, True, self.paAcc.value(), self.paAcc.value()))
+        btnZero = QtWidgets.QPushButton("Set Zero Point (Here=0)")
+        btnZero.clicked.connect(lambda: self.worker.queue_command(self.worker.cmd_set_zero))
+        btnGo = QtWidgets.QPushButton("Go Absolute [Enter]")
+        btnGo.clicked.connect(lambda: self.send_position(True))
 
-        self.btnPosInit = QtWidgets.QPushButton("Init Position Mode")
-        self.btnPosWriteCounts = QtWidgets.QPushButton("Write Target (counts)")
-        self.btnPosWriteMm = QtWidgets.QPushButton("Write Target (mm)")
-        self.btnPosStartSync = QtWidgets.QPushButton("Start (Sync/Left/Right)")
-        self.lblPosFb = QtWidgets.QLabel("fb: (0,0) counts | (0.0, 0.0) mm")
-
-        # layout
-        row = 0
-        L.addWidget(QtWidgets.QLabel("Mechanics"), row,0); row+=1
-        L.addWidget(QtWidgets.QLabel("Travel per rev (mm/rev)"), row,0); L.addWidget(self.mmPerRev, row,1)
-        L.addWidget(QtWidgets.QLabel("Effective pulses per rev"), row,2); L.addWidget(self.pulsesPerRev, row,3); row+=1
-        L.addWidget(QtWidgets.QLabel("Gear ratio (output/motor)"), row,0); L.addWidget(self.gearRatio, row,1); row+=1
-
-        L.addWidget(self.posRelative, row,0,1,2); L.addWidget(self.posSync, row,2,1,2); row+=1
-        L.addWidget(QtWidgets.QLabel("Acc/Dec (ms)"), row,0)
-        L.addWidget(self.posAcc, row,1); L.addWidget(self.posDec, row,2); row+=1
-        L.addWidget(QtWidgets.QLabel("Target speed L/R (rpm)"), row,0)
-        L.addWidget(self.posSpeedL, row,1); L.addWidget(self.posSpeedR, row,2); row+=1
-        L.addWidget(QtWidgets.QLabel("Target counts L/R"), row,0)
-        L.addWidget(self.posCountsL, row,1); L.addWidget(self.posCountsR, row,2); row+=1
-        L.addWidget(QtWidgets.QLabel("Target mm L/R"), row,0)
-        L.addWidget(self.posMmL, row,1); L.addWidget(self.posMmR, row,2); row+=1
-        L.addWidget(self.btnPosInit, row,0); L.addWidget(self.btnPosWriteCounts, row,1); L.addWidget(self.btnPosWriteMm, row,2); L.addWidget(self.btnPosStartSync, row,3); row+=1
-        L.addWidget(self.lblPosFb, row,0,1,4)
-
-        self.btnPosInit.clicked.connect(self.on_pos_init)
-        self.btnPosWriteCounts.clicked.connect(self.on_pos_write)
-        self.btnPosWriteMm.clicked.connect(self.on_pos_write_mm)
-        self.btnPosStartSync.clicked.connect(self.on_pos_start)
+        l.addRow(btnInit); l.addRow(btnZero); l.addRow("Acc:", self.paAcc); l.addRow("Speed:", self.paSpd); l.addRow("GoTo L:", self.paPosL); l.addRow("GoTo R:", self.paPosR); l.addRow(btnGo)
         return w
 
-    # -------- actions --------
-    def on_connect(self):
-        try:
-            self.cfg = SerialCfg(port=self.portEdit.text(), baudrate=int(self.baudCombo.currentText()), slave=self.slaveSpin.value())
-            self.dev = ZLAC8030D(self.cfg)
-            if self.dev.connect():
-                self.lblStatus.setText("connected")
-                self.timer.start()
-            else:
-                self.lblStatus.setText("connect failed")
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Connect error", str(e))
+    # --- 4. Torque ---
+    def ui_torque(self):
+        w = QtWidgets.QWidget(); l = QtWidgets.QFormLayout(w)
+        self.tSlope = QtWidgets.QSpinBox(); self.tSlope.setValue(500)
+        self.tL = QtWidgets.QSpinBox(); self.tL.setRange(-30000,30000); self.tL.setValue(500)
+        self.tR = QtWidgets.QSpinBox(); self.tR.setRange(-30000,30000); self.tR.setValue(500)
+        self.tL.lineEdit().returnPressed.connect(self.send_torque)
+        self.tR.lineEdit().returnPressed.connect(self.send_torque)
+        
+        btnInit = QtWidgets.QPushButton("Set Torque Mode (OK Button)")
+        btnInit.setStyleSheet("background-color: #DDFFDD; font-weight: bold;")
+        btnInit.clicked.connect(lambda: self.worker.queue_command(self.worker.cmd_set_mode_torque, self.tSlope.value()))
+        l.addRow(btnInit); l.addRow("Slope:", self.tSlope); l.addRow("L mA:", self.tL); l.addRow("R mA:", self.tR)
+        l.addRow(QtWidgets.QLabel("* Note: Unit is mA. 500+ Recommended"))
+        return w
 
-    def on_disconnect(self):
-        self.timer.stop()
-        if self.dev:
-            self.dev.close()
-        self.lblStatus.setText("disconnected")
+    # --- 5. Joy & Key ---
+    def ui_graphic(self):
+        w = QtWidgets.QWidget(); vbox = QtWidgets.QVBoxLayout(w)
+        h_set = QtWidgets.QHBoxLayout()
+        h_set.addWidget(QtWidgets.QLabel("Max RPM:"))
+        self.joyLimit = QtWidgets.QSpinBox(); self.joyLimit.setRange(10, 3000); self.joyLimit.setValue(100); self.joyLimit.setSingleStep(10)
+        self.joyLimit.valueChanged.connect(self.update_joystick_settings)
+        h_set.addWidget(self.joyLimit); h_set.addStretch(); vbox.addLayout(h_set)
 
-    def on_vel_init(self):
-        self._safe(lambda: (self.dev.set_mode_velocity(self.velAcc.value(), self.velDec.value()), self.dev.enable()))
+        h_ctrl = QtWidgets.QHBoxLayout()
+        self.joystick = VirtualJoystick(); self.keypad = KeyPadWidget()
+        h_ctrl.addStretch(); h_ctrl.addWidget(self.joystick); h_ctrl.addWidget(self.keypad); h_ctrl.addStretch()
+        vbox.addLayout(h_ctrl)
+        
+        self.update_joystick_settings()
+        self.joystick.sig_speed.connect(self.on_joystick_move)
+        
+        btnInit = QtWidgets.QPushButton("Activate Joystick/Keyboard (Set Velocity Mode)")
+        btnInit.clicked.connect(lambda: self.worker.queue_command(self.worker.cmd_set_mode_vel, 500, 500))
+        vbox.addWidget(btnInit)
+        lbl_hint = QtWidgets.QLabel("Tip: Click here to focus, then use Arrow Keys. Spacebar to Stop.")
+        lbl_hint.setAlignment(QtCore.Qt.AlignCenter); vbox.addWidget(lbl_hint)
+        return w
 
-    def on_vel_write(self):
-        self._safe(lambda: self.dev.set_target_velocity(self.velL.value(), self.velR.value(), sync=self.velSync.isChecked()))
+    # --- Helper: Apply Global Invert & Sync ---
+    def get_synced_values(self, ui_l, ui_r):
+        if not self.chkSync.isChecked(): return ui_l.value(), ui_r.value()
+        sender = self.sender()
+        if sender == ui_l.lineEdit():
+            val = ui_l.value(); ui_r.setValue(val); return val, val
+        elif sender == ui_r.lineEdit():
+            val = ui_r.value(); ui_l.setValue(val); return val, val
+        else: 
+            val = ui_l.value(); ui_r.setValue(val); return val, val
 
-    def on_tq_init(self):
-        self._safe(lambda: (self.dev.set_mode_torque(self.tqSlope.value()), self.dev.enable()))
+    def apply_hw_invert(self, l, r):
+        if self.chkInvL.isChecked(): l = -l
+        if self.chkInvR.isChecked(): r = -r
+        return l, r
 
-    def on_tq_write(self):
-        self._safe(lambda: self.dev.set_target_torque(self.tqL.value(), self.tqR.value(), sync=self.tqSync.isChecked()))
+    # --- Logic ---
+    def toggle_connect(self):
+        if not self.worker.is_connected: self.worker.connect_serial(self.portEdit.text(), int(self.baudCombo.currentText()), 1); self.btnConn.setText("Disconnect")
+        else: self.worker.disconnect_serial(); self.btnConn.setText("Connect")
 
-    def on_pos_init(self):
-        def init():
-            self.dev.set_mode_position(relative=self.posRelative.isChecked(), acc_ms=self.posAcc.value(), dec_ms=self.posDec.value(), sync=self.posSync.isChecked())
-            self.dev.set_position_target_speed(self.posSpeedL.value(), self.posSpeedR.value())
-            self.dev.enable()
-        self._safe(init)
+    def on_run_clicked(self): self.worker.queue_command(self.worker.cmd_enable, self.btnRun.isChecked())
+    def on_stop_clicked(self): self.btnRun.setChecked(False); self.worker.queue_command(self.worker.cmd_enable, False)
 
-    def on_pos_write(self):
-        self._safe(lambda: self.dev.set_target_position_pulses(self.posCountsL.value(), self.posCountsR.value(), sync=True))
+    def send_velocity(self):
+        if not self.check_run(): return
+        vl, vr = self.get_synced_values(self.vL, self.vR)
+        vl = -vl; vr = -vr 
+        vl, vr = self.apply_hw_invert(vl, vr)
+        self.worker.queue_command(self.worker.cmd_write_vel, vl, vr)
 
-    def on_pos_write_mm(self):
-        # counts = mm * (pulses_per_rev * gear_ratio) / (mm_per_rev)
-        mm_rev = max(1e-9, float(self.mmPerRev.value()))
-        ppr = int(self.pulsesPerRev.value())
-        gr = float(self.gearRatio.value())
-        scale = (ppr * gr) / mm_rev
-        left_counts = int(round(self.posMmL.value() * scale))
-        right_counts = int(round(self.posMmR.value() * scale))
-        self.posCountsL.setValue(left_counts)
-        self.posCountsR.setValue(right_counts)
-        self._safe(lambda: self.dev.set_target_position_pulses(left_counts, right_counts, sync=True))
+    def send_position(self, is_absolute):
+        if not self.check_run(): return
+        if is_absolute:
+            val_l, val_r = self.get_synced_values(self.paPosL, self.paPosR)
+            cnt_l, cnt_r = self.convert_input(val_l, val_r, self.paUseMM.isChecked(), self.paScale.value())
+            spd = self.paSpd.value()
+        else:
+            val_l, val_r = self.get_synced_values(self.prPosL, self.prPosR)
+            cnt_l, cnt_r = self.convert_input(val_l, val_r, self.prUseMM.isChecked(), self.prScale.value())
+            spd = self.prSpd.value()
+        
+        cnt_l = -cnt_l; cnt_r = -cnt_r 
+        cnt_l, cnt_r = self.apply_hw_invert(cnt_l, cnt_r)
+        self.worker.queue_command(self.worker.cmd_write_pos_and_start, cnt_l, cnt_r, spd, spd)
 
-    def on_pos_start(self):
-        which = "sync" if self.posSync.isChecked() else "left"
-        # If async and you want right, toggle which accordingly in UI; here we use sync/left for simplicity
-        self._safe(lambda: self.dev.start_position(which))
+    def send_torque(self):
+        if not self.check_run(): return
+        tl, tr = self.get_synced_values(self.tL, self.tR)
+        tl = -tl; tr = -tr 
+        tl, tr = self.apply_hw_invert(tl, tr)
+        self.worker.queue_command(self.worker.cmd_write_torque, tl, tr)
 
-    def on_poll(self):
-        if not self.dev:
-            return
-        try:
-            # velocity feedback
-            try:
-                vl, vr = self.dev.read_actual_velocity()
-                self.lblVelFb.setText(f"fb: ({vl:.1f}, {vr:.1f}) rpm")
-            except Exception:
-                pass
-            # torque feedback
-            try:
-                tl, tr = self.dev.read_actual_torque()
-                self.lblTqFb.setText(f"fb: ({tl:.1f}, {tr:.1f}) A")
-            except Exception:
-                pass
-            # position feedback (also show mm)
-            try:
-                pl, pr = self.dev.read_actual_position()
-                mm_rev = max(1e-9, float(self.mmPerRev.value()))
-                ppr = int(self.pulsesPerRev.value())
-                gr = float(self.gearRatio.value())
-                scale_mm = mm_rev / (ppr * gr)
-                ml, mr = pl * scale_mm, pr * scale_mm
-                self.lblPosFb.setText(f"fb: ({pl}, {pr}) counts | ({ml:.3f}, {mr:.3f}) mm")
-            except Exception:
-                pass
-        except Exception as e:
-            self.lblStatus.setText(f"poll err: {e}")
+    def update_joystick_settings(self):
+        self.joystick.set_max_rpm(self.joyLimit.value())
 
-    def _safe(self, fn):
-        if not self.dev:
-            QtWidgets.QMessageBox.warning(self, "Warning", "Not connected")
-            return
-        try:
-            fn()
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", str(e))
+    def on_joystick_move(self, l_rpm, r_rpm):
+        if self.tabs.currentIndex() == 4 and self.btnRun.isChecked():
+            l_rpm = -l_rpm; r_rpm = -r_rpm 
+            final_l, final_r = self.apply_hw_invert(l_rpm, r_rpm)
+            self.worker.queue_command(self.worker.cmd_write_vel, final_l, final_r)
 
+    def keyPressEvent(self, event):
+        if self.tabs.currentIndex() == 4:
+            key = event.key()
+            if key == QtCore.Qt.Key_Up:    self.keypad.set_key_state('up', True); self.joystick.update_keys(1,0,0,0)
+            elif key == QtCore.Qt.Key_Down:  self.keypad.set_key_state('down', True); self.joystick.update_keys(0,1,0,0)
+            elif key == QtCore.Qt.Key_Left:  self.keypad.set_key_state('left', True); self.joystick.update_keys(0,0,1,0)
+            elif key == QtCore.Qt.Key_Right: self.keypad.set_key_state('right', True); self.joystick.update_keys(0,0,0,1)
+            elif key == QtCore.Qt.Key_Space: 
+                self.joystick.stop_immediate(); self.joystick.update_keys(0,0,0,0)
+    
+    def keyReleaseEvent(self, event):
+        if self.tabs.currentIndex() == 4:
+            key = event.key()
+            if key == QtCore.Qt.Key_Up:    self.keypad.set_key_state('up', False)
+            elif key == QtCore.Qt.Key_Down:  self.keypad.set_key_state('down', False)
+            elif key == QtCore.Qt.Key_Left:  self.keypad.set_key_state('left', False)
+            elif key == QtCore.Qt.Key_Right: self.keypad.set_key_state('right', False)
+            k = self.keypad.keys
+            self.joystick.update_keys(k['up'], k['down'], k['left'], k['right'])
+
+    def check_run(self):
+        if not self.btnRun.isChecked(): self.lblStatus.setText("⚠️ Press RUN first!"); return False
+        return True
+
+    def on_status(self, msg): self.lblStatus.setText(msg)
+    def update_feedback(self, data):
+        if 'vl' in data: self.lblFbVel.setText(f"Vel: {data['vl']:.1f} / {data['vr']:.1f} rpm")
+        if 'tl' in data: self.lblFbTq.setText(f"Tq: {data['tl']:.1f} / {data['tr']:.1f} A")
+        if 'pl' in data: self.lblFbPos.setText(f"Pos: {data['pl']} / {data['pr']}"); self.wheelL.set_position(data['pl']); self.wheelR.set_position(data['pr'])
+    def closeEvent(self, event): self.worker.disconnect_serial(); event.accept()
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
-    w = MainWindow(); w.show()
+    w = MainWindow()
+    w.show()
     sys.exit(app.exec_())
