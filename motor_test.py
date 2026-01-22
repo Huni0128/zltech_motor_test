@@ -26,7 +26,8 @@ class REG:
     TSLOPE_L = 0x2086; TSLOPE_R = 0x2087
     TTORQUE_L= 0x2090; TTORQUE_R= 0x2091
     ATORQUE_L= 0x20AD; ATORQUE_R= 0x20AE
-    SET_ZERO = 0x2006
+    CLEAR_FEEDBACK_POS = 0x2005  # 현재 엔코더(피드백) 위치값을 0으로 클리어
+    SET_ZERO = 0x2006            # Absolute 모드에서 영점 재설정
     
     # [안전장치] 통신 타임아웃 설정 레지스터 (0x2014 or similar depending on FW)
     # PC가 죽으면 드라이버가 알아서 멈추게 하는 핵심 설정
@@ -318,7 +319,13 @@ class MotorWorker(QtCore.QThread):
         self._write_multi(REG.TPOS_H_L, [l_hi, l_lo, r_hi, r_lo])
         self.msleep(50); self._write(REG.CONTROL_WORD, 0x10) 
     
-    def cmd_set_zero(self): self._write(REG.SET_ZERO, 3)
+    def cmd_clear_feedback_pos(self): 
+        """현재 엔코더(피드백) 위치값을 0으로 클리어 (1=L, 2=R, 3=Both)"""
+        self._write(REG.CLEAR_FEEDBACK_POS, 3)
+    
+    def cmd_set_zero(self): 
+        """Absolute 모드에서 영점 재설정 (1=L, 2=R, 3=Both)"""
+        self._write(REG.SET_ZERO, 3)
 
     def cmd_set_mode_torque(self, slope):
         self._write(REG.CONTROL_WORD, 0x07); self.msleep(50)
@@ -399,6 +406,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lblFbVel.setFont(font); self.lblFbPos.setFont(font); self.lblFbTq.setFont(font)
         fb_layout.addWidget(self.lblFbVel); fb_layout.addWidget(self.lblFbPos); fb_layout.addWidget(self.lblFbTq)
         layout.addLayout(fb_layout)
+        
+        # Position Reset Button
+        h_reset = QtWidgets.QHBoxLayout()
+        self.btnResetPos = QtWidgets.QPushButton("🔄 Reset Position (Set 0/0)")
+        self.btnResetPos.setMinimumHeight(40)
+        self.btnResetPos.setStyleSheet("background-color: #FFD700; font-weight: bold; color: black;")
+        self.btnResetPos.clicked.connect(self.on_reset_position)
+        h_reset.addStretch()
+        h_reset.addWidget(self.btnResetPos)
+        h_reset.addStretch()
+        layout.addLayout(h_reset)
         
         self.lblStatus = QtWidgets.QLabel("Disconnected"); layout.addWidget(self.lblStatus)
 
@@ -542,6 +560,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def on_run_clicked(self): self.worker.queue_command(self.worker.cmd_enable, self.btnRun.isChecked())
     def on_stop_clicked(self): self.btnRun.setChecked(False); self.worker.queue_command(self.worker.cmd_enable, False)
+    
+    def on_reset_position(self):
+        """현재 엔코더 위치값을 0/0으로 클리어"""
+        self.worker.queue_command(self.worker.cmd_clear_feedback_pos)
+        self.lblStatus.setText("✅ Encoder position cleared to 0/0")
 
     def send_velocity(self):
         if not self.check_run(): return
@@ -609,7 +632,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def update_feedback(self, data):
         if 'vl' in data: self.lblFbVel.setText(f"Vel: {data['vl']:.1f} / {data['vr']:.1f} rpm")
         if 'tl' in data: self.lblFbTq.setText(f"Tq: {data['tl']:.1f} / {data['tr']:.1f} A")
-        if 'pl' in data: self.lblFbPos.setText(f"Pos: {data['pl']} / {data['pr']}"); self.wheelL.set_position(data['pl']); self.wheelR.set_position(data['pr'])
+        if 'pl' in data: self.lblFbPos.setText(f"Pos: {data['pl']} / {data['pr']}")
     def closeEvent(self, event): self.worker.disconnect_serial(); event.accept()
 
 if __name__ == "__main__":
