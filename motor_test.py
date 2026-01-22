@@ -354,6 +354,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.init_ui()
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
         
+        # 반복 동작 관련 변수
+        self.vel_repeat_timer = QtCore.QTimer()
+        self.vel_repeat_timer.timeout.connect(self.vel_repeat_step)
+        self.vel_repeat_count = 0
+        self.vel_repeat_max = 0
+        self.vel_repeat_forward = True
+        
+        self.pos_repeat_timer = QtCore.QTimer()
+        self.pos_repeat_timer.timeout.connect(self.pos_repeat_step)
+        self.pos_repeat_count = 0
+        self.pos_repeat_max = 0
+        self.pos_repeat_forward = True
+        
         # [안전] 프로그램 종료 시 정지 신호 전송 시도
         atexit.register(self.emergency_stop)
 
@@ -434,6 +447,29 @@ class MainWindow(QtWidgets.QMainWindow):
         btnInit.clicked.connect(lambda: self.worker.queue_command(self.worker.cmd_set_mode_vel, self.vAcc.value(), self.vAcc.value()))
         
         l.addRow(btnInit); l.addRow("Acc(ms):", self.vAcc); l.addRow("Target L:", self.vL); l.addRow("Target R:", self.vR)
+        
+        # 반복 동작 설정
+        l.addRow(QtWidgets.QLabel("===== Repeat Mode ====="))
+        self.vRepeatCount = QtWidgets.QSpinBox(); self.vRepeatCount.setRange(1, 1000); self.vRepeatCount.setValue(5); self.vRepeatCount.setSuffix(" times")
+        self.vRepeatTime = QtWidgets.QDoubleSpinBox(); self.vRepeatTime.setRange(0.1, 60.0); self.vRepeatTime.setValue(2.0); self.vRepeatTime.setSuffix(" sec")
+        l.addRow("Repeat Count:", self.vRepeatCount)
+        l.addRow("Time per move:", self.vRepeatTime)
+        
+        h_repeat = QtWidgets.QHBoxLayout()
+        self.btnVelRepeatStart = QtWidgets.QPushButton("▶ Start Repeat")
+        self.btnVelRepeatStart.setStyleSheet("background-color: #90EE90; font-weight: bold;")
+        self.btnVelRepeatStart.clicked.connect(self.start_vel_repeat)
+        self.btnVelRepeatStop = QtWidgets.QPushButton("⏹ Stop Repeat")
+        self.btnVelRepeatStop.setStyleSheet("background-color: #FFB6C1; font-weight: bold;")
+        self.btnVelRepeatStop.clicked.connect(self.stop_vel_repeat)
+        self.btnVelRepeatStop.setEnabled(False)
+        h_repeat.addWidget(self.btnVelRepeatStart); h_repeat.addWidget(self.btnVelRepeatStop)
+        l.addRow(h_repeat)
+        
+        self.lblVelRepeatStatus = QtWidgets.QLabel("Ready")
+        self.lblVelRepeatStatus.setStyleSheet("color: gray; font-weight: bold;")
+        l.addRow("Status:", self.lblVelRepeatStatus)
+        
         return w
 
     # --- [New] MM Conversion Helper ---
@@ -467,6 +503,27 @@ class MainWindow(QtWidgets.QMainWindow):
         btnGo.clicked.connect(lambda: self.send_position(False))
 
         l.addRow(btnInit); l.addRow("Acc:", self.prAcc); l.addRow("Speed:", self.prSpd); l.addRow("Move L:", self.prPosL); l.addRow("Move R:", self.prPosR); l.addRow(btnGo)
+        
+        # 반복 동작 설정
+        l.addRow(QtWidgets.QLabel("===== Repeat Mode ====="))
+        self.prRepeatCount = QtWidgets.QSpinBox(); self.prRepeatCount.setRange(1, 1000); self.prRepeatCount.setValue(5); self.prRepeatCount.setSuffix(" times")
+        l.addRow("Repeat Count:", self.prRepeatCount)
+        
+        h_repeat = QtWidgets.QHBoxLayout()
+        self.btnPosRepeatStart = QtWidgets.QPushButton("▶ Start Repeat")
+        self.btnPosRepeatStart.setStyleSheet("background-color: #90EE90; font-weight: bold;")
+        self.btnPosRepeatStart.clicked.connect(self.start_pos_repeat)
+        self.btnPosRepeatStop = QtWidgets.QPushButton("⏹ Stop Repeat")
+        self.btnPosRepeatStop.setStyleSheet("background-color: #FFB6C1; font-weight: bold;")
+        self.btnPosRepeatStop.clicked.connect(self.stop_pos_repeat)
+        self.btnPosRepeatStop.setEnabled(False)
+        h_repeat.addWidget(self.btnPosRepeatStart); h_repeat.addWidget(self.btnPosRepeatStop)
+        l.addRow(h_repeat)
+        
+        self.lblPosRepeatStatus = QtWidgets.QLabel("Ready")
+        self.lblPosRepeatStatus.setStyleSheet("color: gray; font-weight: bold;")
+        l.addRow("Status:", self.lblPosRepeatStatus)
+        
         return w
 
     # --- 3. Absolute Position ---
@@ -597,6 +654,99 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def update_joystick_settings(self):
         self.joystick.set_max_rpm(self.joyLimit.value())
+    
+    # --- Velocity Repeat ---
+    def start_vel_repeat(self):
+        if not self.check_run(): return
+        self.vel_repeat_count = 0
+        self.vel_repeat_max = self.vRepeatCount.value()
+        self.vel_repeat_forward = True
+        self.btnVelRepeatStart.setEnabled(False)
+        self.btnVelRepeatStop.setEnabled(True)
+        self.lblVelRepeatStatus.setText(f"Running: 0/{self.vel_repeat_max}")
+        self.lblVelRepeatStatus.setStyleSheet("color: green; font-weight: bold;")
+        self.vel_repeat_step()
+    
+    def stop_vel_repeat(self):
+        self.vel_repeat_timer.stop()
+        self.worker.queue_command(self.worker.cmd_write_vel, 0, 0)
+        self.btnVelRepeatStart.setEnabled(True)
+        self.btnVelRepeatStop.setEnabled(False)
+        self.lblVelRepeatStatus.setText("Stopped")
+        self.lblVelRepeatStatus.setStyleSheet("color: red; font-weight: bold;")
+    
+    def vel_repeat_step(self):
+        if self.vel_repeat_count >= self.vel_repeat_max:
+            self.stop_vel_repeat()
+            self.lblVelRepeatStatus.setText("Completed")
+            self.lblVelRepeatStatus.setStyleSheet("color: blue; font-weight: bold;")
+            return
+        
+        vl, vr = self.vL.value(), self.vR.value()
+        if not self.vel_repeat_forward:
+            vl, vr = -vl, -vr
+        
+        vl = -vl; vr = -vr
+        vl, vr = self.apply_hw_invert(vl, vr)
+        self.worker.queue_command(self.worker.cmd_write_vel, vl, vr)
+        
+        if not self.vel_repeat_forward:
+            self.vel_repeat_count += 1
+            self.lblVelRepeatStatus.setText(f"Running: {self.vel_repeat_count}/{self.vel_repeat_max}")
+        
+        self.vel_repeat_forward = not self.vel_repeat_forward
+        self.vel_repeat_timer.start(int(self.vRepeatTime.value() * 1000))
+    
+    # --- Position Repeat ---
+    def start_pos_repeat(self):
+        if not self.check_run(): return
+        self.pos_repeat_count = 0
+        self.pos_repeat_max = self.prRepeatCount.value()
+        self.pos_repeat_forward = True
+        self.btnPosRepeatStart.setEnabled(False)
+        self.btnPosRepeatStop.setEnabled(True)
+        self.lblPosRepeatStatus.setText(f"Running: 0/{self.pos_repeat_max}")
+        self.lblPosRepeatStatus.setStyleSheet("color: green; font-weight: bold;")
+        self.pos_repeat_step()
+    
+    def stop_pos_repeat(self):
+        self.pos_repeat_timer.stop()
+        self.btnPosRepeatStart.setEnabled(True)
+        self.btnPosRepeatStop.setEnabled(False)
+        self.lblPosRepeatStatus.setText("Stopped")
+        self.lblPosRepeatStatus.setStyleSheet("color: red; font-weight: bold;")
+    
+    def pos_repeat_step(self):
+        if self.pos_repeat_count >= self.pos_repeat_max:
+            self.stop_pos_repeat()
+            self.lblPosRepeatStatus.setText("Completed")
+            self.lblPosRepeatStatus.setStyleSheet("color: blue; font-weight: bold;")
+            return
+        
+        val_l, val_r = self.prPosL.value(), self.prPosR.value()
+        if not self.pos_repeat_forward:
+            val_l, val_r = -val_l, -val_r
+        
+        cnt_l, cnt_r = self.convert_input(val_l, val_r, self.prUseMM.isChecked(), self.prScale.value())
+        spd = self.prSpd.value()
+        
+        cnt_l = -cnt_l; cnt_r = -cnt_r
+        cnt_l, cnt_r = self.apply_hw_invert(cnt_l, cnt_r)
+        self.worker.queue_command(self.worker.cmd_write_pos_and_start, cnt_l, cnt_r, spd, spd)
+        
+        if not self.pos_repeat_forward:
+            self.pos_repeat_count += 1
+            self.lblPosRepeatStatus.setText(f"Running: {self.pos_repeat_count}/{self.pos_repeat_max}")
+        
+        self.pos_repeat_forward = not self.pos_repeat_forward
+        
+        # Position 이동 시간 추정 (거리/속도 기반)
+        max_cnt = max(abs(cnt_l), abs(cnt_r))
+        if spd > 0:
+            estimated_time = (max_cnt / 1000.0) / spd * 60.0 + 1.0  # 안전 마진 1초
+        else:
+            estimated_time = 3.0
+        self.pos_repeat_timer.start(int(estimated_time * 1000))
 
     def on_joystick_move(self, l_rpm, r_rpm):
         if self.tabs.currentIndex() == 4 and self.btnRun.isChecked():
