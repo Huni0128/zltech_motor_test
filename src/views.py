@@ -3,45 +3,6 @@ import math
 from PyQt5 import QtCore, QtWidgets, QtGui
 
 
-class WheelWidget(QtWidgets.QWidget):
-    def __init__(self, label="L"):
-        super().__init__()
-        self.setMinimumSize(80, 120)
-        self.total_counts = 0
-        self.label = label
-        self.color = QtGui.QColor(60, 100, 200) if label == "L" else QtGui.QColor(200, 60, 60)
-
-    def set_position(self, counts):
-        self.total_counts = counts
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-        rect = QtCore.QRectF(10, 10, w - 20, h - 20)
-
-        path = QtGui.QPainterPath()
-        path.addRoundedRect(rect, 10, 10)
-        path.setFillRule(QtCore.Qt.WindingFill)
-
-        painter.setBrush(QtGui.QBrush(self.color))
-        painter.setPen(QtGui.QPen(QtCore.Qt.black, 2))
-        painter.drawPath(path)
-
-        offset = -(self.total_counts / 20.0) % 30
-        painter.setClipPath(path)
-        painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 100), 4))
-        for i in range(-1, int(h / 30) + 2):
-            y = i * 30 + offset
-            painter.drawLine(QtCore.QPointF(10, y), QtCore.QPointF(w - 10, y))
-
-        painter.setClipping(False)
-        painter.setPen(QtCore.Qt.black)
-        painter.setFont(QtGui.QFont("Arial", 12, QtGui.QFont.Bold))
-        painter.drawText(rect, QtCore.Qt.AlignCenter, self.label)
-
-
 class KeyPadWidget(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
@@ -267,17 +228,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.chkInvR.setChecked(True)
         h_glob.addWidget(self.chkSync); h_glob.addStretch(); h_glob.addWidget(self.chkInvL); h_glob.addWidget(self.chkInvR)
 
-        # 4) Wheel visualization
-        h_wheels = QtWidgets.QHBoxLayout()
-        self.wheelL = WheelWidget("L")
-        self.wheelR = WheelWidget("R")
-        h_wheels.addStretch()
-        h_wheels.addWidget(self.wheelL)
-        h_wheels.addWidget(self.wheelR)
-        h_wheels.addStretch()
-        layout.addLayout(h_wheels)
-
-        # 5) Tabs
+        # 4) Tabs
         self.tabs = QtWidgets.QTabWidget()
         self.tabs.addTab(self._ui_velocity(), "1. Velocity")
         self.tabs.addTab(self._ui_position_rel(), "2. Relative Pos")

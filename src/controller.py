@@ -351,11 +351,6 @@ class MainController(QtCore.QObject):
         self.v.lblStatus.setText(f"❌ Error: {msg}")
 
     def _on_feedback(self, data):
-        # Wheel animation
-        if 'pl' in data and 'pr' in data:
-            self.v.wheelL.set_position(data['pl'])
-            self.v.wheelR.set_position(data['pr'])
-
         # Feedback labels
         if 'vl' in data and 'vr' in data:
             self.v.lblFbVel.setText(f"Vel: {data['vl']:.1f} / {data['vr']:.1f} rpm")
