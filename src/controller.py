@@ -39,8 +39,10 @@ class MainController(QtCore.QObject):
         self.v.btnClear.clicked.connect(lambda: self.m.queue(self.m.worker.cmd_clear_fault))
         self.v.btnResetPos.clicked.connect(self.on_reset_position)
 
+        # tab changed -> auto mode switch
+        self.v.tabs.currentChanged.connect(self.on_tab_changed)
+
         # velocity
-        self.v.btnVelInit.clicked.connect(self.init_velocity_mode)
         self.v.vL.lineEdit().returnPressed.connect(self.send_velocity)
         self.v.vR.lineEdit().returnPressed.connect(self.send_velocity)
         self.v.btnVelRepeatStart.clicked.connect(self.start_vel_repeat)
@@ -48,7 +50,6 @@ class MainController(QtCore.QObject):
         self.v.vel_repeat_timer.timeout.connect(self.vel_repeat_step)
 
         # relative pos
-        self.v.btnRelInit.clicked.connect(self.init_relative_mode)
         self.v.btnRelGo.clicked.connect(lambda: self.send_position(False))
         self.v.prPosL.lineEdit().returnPressed.connect(lambda: self.send_position(False))
         self.v.prPosR.lineEdit().returnPressed.connect(lambda: self.send_position(False))
@@ -59,7 +60,6 @@ class MainController(QtCore.QObject):
         # joystick
         self.v.joyLimit.valueChanged.connect(self.update_joystick_settings)
         self.v.joystick.sig_speed.connect(self.on_joystick_move)
-        self.v.btnJoyInit.clicked.connect(self.init_velocity_mode)
         self.update_joystick_settings()
 
         # 키보드 이벤트(메인윈도우 이벤트 필터로 받기)
@@ -143,6 +143,24 @@ class MainController(QtCore.QObject):
         return l, r
 
     # -----------------------
+    # Tab Auto Mode Switch
+    # -----------------------
+    def on_tab_changed(self, index):
+        """탭 변경 시 자동으로 해당 모드로 전환"""
+        if not self.m.is_connected:
+            return
+        
+        if index == 0:  # Velocity
+            self.init_velocity_mode()
+            self.v.lblStatus.setText("🚀 Velocity Mode Activated")
+        elif index == 1:  # Relative Pos
+            self.init_relative_mode()
+            self.v.lblStatus.setText("📍 Relative Position Mode Activated")
+        elif index == 2:  # Joystick
+            self.init_velocity_mode()
+            self.v.lblStatus.setText("🎮 Joystick Mode Activated (Velocity)")
+
+    # -----------------------
     # Connection / Run
     # -----------------------
     def toggle_connect(self):
@@ -151,6 +169,8 @@ class MainController(QtCore.QObject):
             baud = int(self.v.baudCombo.currentText())
             self.m.connect_serial(port, baud, 1)
             self.v.btnConn.setText("Disconnect")
+            # 연결 후 현재 탭에 맞는 모드로 초기화 (약간의 지연 후)
+            QtCore.QTimer.singleShot(500, lambda: self.on_tab_changed(self.v.tabs.currentIndex()))
         else:
             self.m.disconnect_serial()
             self.v.btnConn.setText("Connect")

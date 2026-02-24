@@ -267,10 +267,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.vL = QtWidgets.QSpinBox(); self.vL.setRange(-3000, 3000)
         self.vR = QtWidgets.QSpinBox(); self.vR.setRange(-3000, 3000)
 
-        self.btnVelInit = QtWidgets.QPushButton("Set Velocity Mode (OK Button)")
-        self.btnVelInit.setStyleSheet("background-color: #DDDDFF; font-weight: bold;")
-
-        l.addRow(self.btnVelInit)
+        l.addRow(QtWidgets.QLabel("🚀 Velocity Mode (Auto-activated)"))
         l.addRow("Acc(ms):", self.vAcc)
         l.addRow("Target L:", self.vL)
         l.addRow("Target R:", self.vR)
@@ -314,11 +311,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.prPosL = QtWidgets.QDoubleSpinBox(); self.prPosL.setRange(-2000000000, 2000000000); self.prPosL.setDecimals(1)
         self.prPosR = QtWidgets.QDoubleSpinBox(); self.prPosR.setRange(-2000000000, 2000000000); self.prPosR.setDecimals(1)
 
-        self.btnRelInit = QtWidgets.QPushButton("Set Relative Mode (OK Button)")
-        self.btnRelInit.setStyleSheet("background-color: #DDDDFF; font-weight: bold;")
         self.btnRelGo = QtWidgets.QPushButton("Go Relative [Enter]")
 
-        l.addRow(self.btnRelInit)
+        l.addRow(QtWidgets.QLabel("📍 Relative Position Mode (Auto-activated)"))
         l.addRow("Acc:", self.prAcc)
         l.addRow("Speed:", self.prSpd)
         l.addRow("Move L:", self.prPosL)
@@ -351,7 +346,7 @@ class MainWindow(QtWidgets.QMainWindow):
         h_set.addWidget(QtWidgets.QLabel("Max RPM:"))
         self.joyLimit = QtWidgets.QSpinBox()
         self.joyLimit.setRange(10, 3000)
-        self.joyLimit.setValue(100)
+        self.joyLimit.setValue(10)
         self.joyLimit.setSingleStep(10)
         h_set.addWidget(self.joyLimit)
         h_set.addStretch()
@@ -366,8 +361,10 @@ class MainWindow(QtWidgets.QMainWindow):
         h_ctrl.addStretch()
         vbox.addLayout(h_ctrl)
 
-        self.btnJoyInit = QtWidgets.QPushButton("Activate Joystick/Keyboard (Set Velocity Mode)")
-        vbox.addWidget(self.btnJoyInit)
+        lbl_mode = QtWidgets.QLabel("🎮 Joystick Mode (Auto-activated)")
+        lbl_mode.setAlignment(QtCore.Qt.AlignCenter)
+        lbl_mode.setStyleSheet("font-weight: bold; color: #0066CC;")
+        vbox.addWidget(lbl_mode)
 
         lbl_hint = QtWidgets.QLabel("Tip: Click here to focus, then use Arrow Keys. Spacebar to Stop.")
         lbl_hint.setAlignment(QtCore.Qt.AlignCenter)
