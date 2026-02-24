@@ -267,10 +267,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.vL = QtWidgets.QSpinBox(); self.vL.setRange(-3000, 3000)
         self.vR = QtWidgets.QSpinBox(); self.vR.setRange(-3000, 3000)
 
-        l.addRow(QtWidgets.QLabel("🚀 Velocity Mode (Auto-activated)"))
+        self.btnVelGo = QtWidgets.QPushButton("Go Velocity [Enter]")
+
+        l.addRow(QtWidgets.QLabel("Velocity Mode (Auto-activated)"))
         l.addRow("Acc(ms):", self.vAcc)
         l.addRow("Target L:", self.vL)
         l.addRow("Target R:", self.vR)
+        l.addRow(self.btnVelGo)
 
         l.addRow(QtWidgets.QLabel("===== Repeat Mode ====="))
         self.vRepeatCount = QtWidgets.QSpinBox(); self.vRepeatCount.setRange(1, 1000); self.vRepeatCount.setValue(5); self.vRepeatCount.setSuffix(" times")
@@ -313,7 +316,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.btnRelGo = QtWidgets.QPushButton("Go Relative [Enter]")
 
-        l.addRow(QtWidgets.QLabel("📍 Relative Position Mode (Auto-activated)"))
+        l.addRow(QtWidgets.QLabel("Relative Position Mode (Auto-activated)"))
         l.addRow("Acc:", self.prAcc)
         l.addRow("Speed:", self.prSpd)
         l.addRow("Move L:", self.prPosL)
@@ -361,7 +364,7 @@ class MainWindow(QtWidgets.QMainWindow):
         h_ctrl.addStretch()
         vbox.addLayout(h_ctrl)
 
-        lbl_mode = QtWidgets.QLabel("🎮 Joystick Mode (Auto-activated)")
+        lbl_mode = QtWidgets.QLabel("Joystick Mode (Auto-activated)")
         lbl_mode.setAlignment(QtCore.Qt.AlignCenter)
         lbl_mode.setStyleSheet("font-weight: bold; color: #0066CC;")
         vbox.addWidget(lbl_mode)

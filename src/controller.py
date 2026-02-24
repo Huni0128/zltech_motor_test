@@ -43,6 +43,7 @@ class MainController(QtCore.QObject):
         self.v.tabs.currentChanged.connect(self.on_tab_changed)
 
         # velocity
+        self.v.btnVelGo.clicked.connect(self.send_velocity)
         self.v.vL.lineEdit().returnPressed.connect(self.send_velocity)
         self.v.vR.lineEdit().returnPressed.connect(self.send_velocity)
         self.v.btnVelRepeatStart.clicked.connect(self.start_vel_repeat)
@@ -109,7 +110,7 @@ class MainController(QtCore.QObject):
     # -----------------------
     def check_run(self):
         if not self.v.btnRun.isChecked():
-            self.v.lblStatus.setText("⚠️ Press RUN first!")
+            self.v.lblStatus.setText("Press RUN first!")
             return False
         return True
 
@@ -152,13 +153,13 @@ class MainController(QtCore.QObject):
         
         if index == 0:  # Velocity
             self.init_velocity_mode()
-            self.v.lblStatus.setText("🚀 Velocity Mode Activated")
+            self.v.lblStatus.setText("Velocity Mode Activated")
         elif index == 1:  # Relative Pos
             self.init_relative_mode()
-            self.v.lblStatus.setText("📍 Relative Position Mode Activated")
+            self.v.lblStatus.setText("Relative Position Mode Activated")
         elif index == 2:  # Joystick
             self.init_velocity_mode()
-            self.v.lblStatus.setText("🎮 Joystick Mode Activated (Velocity)")
+            self.v.lblStatus.setText("Joystick Mode Activated (Velocity)")
 
     # -----------------------
     # Connection / Run
@@ -368,7 +369,7 @@ class MainController(QtCore.QObject):
         self.v.lblStatus.setText(msg)
 
     def _on_error(self, msg):
-        self.v.lblStatus.setText(f"❌ Error: {msg}")
+        self.v.lblStatus.setText(f"Error: {msg}")
 
     def _on_feedback(self, data):
         # Feedback labels
