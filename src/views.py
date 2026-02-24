@@ -281,9 +281,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs = QtWidgets.QTabWidget()
         self.tabs.addTab(self._ui_velocity(), "1. Velocity")
         self.tabs.addTab(self._ui_position_rel(), "2. Relative Pos")
-        self.tabs.addTab(self._ui_position_abs(), "3. Absolute Pos")
-        self.tabs.addTab(self._ui_torque(), "4. Torque")
-        self.tabs.addTab(self._ui_graphic(), "5. Joy & Key")
+        self.tabs.addTab(self._ui_graphic(), "3. Joy & Key")
         layout.addWidget(self.tabs)
 
         fb_layout = QtWidgets.QHBoxLayout()
@@ -392,57 +390,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lblPosRepeatStatus = QtWidgets.QLabel("Ready")
         self.lblPosRepeatStatus.setStyleSheet("color: gray; font-weight: bold;")
         l.addRow("Status:", self.lblPosRepeatStatus)
-        return w
-
-    def _ui_position_abs(self):
-        w = QtWidgets.QWidget()
-        l = QtWidgets.QFormLayout(w)
-
-        h_unit = QtWidgets.QHBoxLayout()
-        self.paUseMM = QtWidgets.QCheckBox("Use MM Unit")
-        self.paUseMM.setStyleSheet("color: darkgreen; font-weight: bold;")
-        self.paScale = QtWidgets.QDoubleSpinBox(); self.paScale.setRange(1.0, 10000.0); self.paScale.setValue(180.0)
-        h_unit.addWidget(self.paUseMM)
-        h_unit.addWidget(QtWidgets.QLabel("Dist(mm) for 1000p:"))
-        h_unit.addWidget(self.paScale)
-        l.addRow(h_unit)
-
-        self.paAcc = QtWidgets.QSpinBox(); self.paAcc.setRange(0, 30000); self.paAcc.setValue(500)
-        self.paSpd = QtWidgets.QSpinBox(); self.paSpd.setRange(1, 3000); self.paSpd.setValue(20); self.paSpd.setSuffix(" rpm")
-
-        self.paPosL = QtWidgets.QDoubleSpinBox(); self.paPosL.setRange(-2000000000, 2000000000); self.paPosL.setDecimals(1)
-        self.paPosR = QtWidgets.QDoubleSpinBox(); self.paPosR.setRange(-2000000000, 2000000000); self.paPosR.setDecimals(1)
-
-        self.btnAbsInit = QtWidgets.QPushButton("Set Absolute Mode (OK Button)")
-        self.btnAbsInit.setStyleSheet("background-color: #FFDDDD; font-weight: bold;")
-        self.btnAbsZero = QtWidgets.QPushButton("Set Zero Point (Here=0)")
-        self.btnAbsGo = QtWidgets.QPushButton("Go Absolute [Enter]")
-
-        l.addRow(self.btnAbsInit)
-        l.addRow(self.btnAbsZero)
-        l.addRow("Acc:", self.paAcc)
-        l.addRow("Speed:", self.paSpd)
-        l.addRow("GoTo L:", self.paPosL)
-        l.addRow("GoTo R:", self.paPosR)
-        l.addRow(self.btnAbsGo)
-        return w
-
-    def _ui_torque(self):
-        w = QtWidgets.QWidget()
-        l = QtWidgets.QFormLayout(w)
-
-        self.tSlope = QtWidgets.QSpinBox(); self.tSlope.setValue(500)
-        self.tL = QtWidgets.QSpinBox(); self.tL.setRange(-30000, 30000); self.tL.setValue(500)
-        self.tR = QtWidgets.QSpinBox(); self.tR.setRange(-30000, 30000); self.tR.setValue(500)
-
-        self.btnTqInit = QtWidgets.QPushButton("Set Torque Mode (OK Button)")
-        self.btnTqInit.setStyleSheet("background-color: #DDFFDD; font-weight: bold;")
-
-        l.addRow(self.btnTqInit)
-        l.addRow("Slope:", self.tSlope)
-        l.addRow("L mA:", self.tL)
-        l.addRow("R mA:", self.tR)
-        l.addRow(QtWidgets.QLabel("* Note: Unit is mA. 500+ Recommended"))
         return w
 
     def _ui_graphic(self):

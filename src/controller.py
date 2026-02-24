@@ -56,18 +56,6 @@ class MainController(QtCore.QObject):
         self.v.btnPosRepeatStop.clicked.connect(self.stop_pos_repeat)
         self.v.pos_repeat_timer.timeout.connect(self.pos_repeat_step)
 
-        # absolute pos
-        self.v.btnAbsInit.clicked.connect(self.init_absolute_mode)
-        self.v.btnAbsZero.clicked.connect(lambda: self.m.queue(self.m.worker.cmd_set_zero))
-        self.v.btnAbsGo.clicked.connect(lambda: self.send_position(True))
-        self.v.paPosL.lineEdit().returnPressed.connect(lambda: self.send_position(True))
-        self.v.paPosR.lineEdit().returnPressed.connect(lambda: self.send_position(True))
-
-        # torque
-        self.v.btnTqInit.clicked.connect(self.init_torque_mode)
-        self.v.tL.lineEdit().returnPressed.connect(self.send_torque)
-        self.v.tR.lineEdit().returnPressed.connect(self.send_torque)
-
         # joystick
         self.v.joyLimit.valueChanged.connect(self.update_joystick_settings)
         self.v.joystick.sig_speed.connect(self.on_joystick_move)
@@ -81,7 +69,7 @@ class MainController(QtCore.QObject):
     # Event Filter (키 처리)
     # -----------------------
     def eventFilter(self, obj, event):
-        if obj is self.v and self.v.tabs.currentIndex() == 4:
+        if obj is self.v and self.v.tabs.currentIndex() == 2:
             if event.type() == QtCore.QEvent.KeyPress:
                 self._on_key_press(event)
             elif event.type() == QtCore.QEvent.KeyRelease:
@@ -244,7 +232,7 @@ class MainController(QtCore.QObject):
         self.v.joystick.set_max_rpm(self.v.joyLimit.value())
 
     def on_joystick_move(self, l_rpm, r_rpm):
-        if self.v.tabs.currentIndex() == 4 and self.v.btnRun.isChecked():
+        if self.v.tabs.currentIndex() == 2 and self.v.btnRun.isChecked():
             l_rpm = -l_rpm
             r_rpm = -r_rpm
             final_l, final_r = self.apply_hw_invert(l_rpm, r_rpm)
