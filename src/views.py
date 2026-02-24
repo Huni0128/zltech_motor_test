@@ -263,7 +263,7 @@ class MainWindow(QtWidgets.QMainWindow):
         w = QtWidgets.QWidget()
         l = QtWidgets.QFormLayout(w)
 
-        self.vAcc = QtWidgets.QSpinBox(); self.vAcc.setRange(0, 30000); self.vAcc.setValue(500)
+        self.vAcc = QtWidgets.QSpinBox(); self.vAcc.setRange(0, 30000); self.vAcc.setValue(40)
         self.vL = QtWidgets.QSpinBox(); self.vL.setRange(-3000, 3000)
         self.vR = QtWidgets.QSpinBox(); self.vR.setRange(-3000, 3000)
 
@@ -308,7 +308,7 @@ class MainWindow(QtWidgets.QMainWindow):
         h_unit.addWidget(self.prScale)
         l.addRow(h_unit)
 
-        self.prAcc = QtWidgets.QSpinBox(); self.prAcc.setRange(0, 30000); self.prAcc.setValue(500)
+        self.prAcc = QtWidgets.QSpinBox(); self.prAcc.setRange(0, 30000); self.prAcc.setValue(40)
         self.prSpd = QtWidgets.QSpinBox(); self.prSpd.setRange(1, 3000); self.prSpd.setValue(20); self.prSpd.setSuffix(" rpm")
 
         self.prPosL = QtWidgets.QDoubleSpinBox(); self.prPosL.setRange(-2000000000, 2000000000); self.prPosL.setDecimals(1)

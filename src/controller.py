@@ -19,6 +19,9 @@ class MainController(QtCore.QObject):
         self.pos_repeat_count = 0
         self.pos_repeat_max = 0
         self.pos_repeat_forward = True
+        self.pos_repeat_target_l = 0  # 목표 위치 추적
+        self.pos_repeat_target_r = 0
+        self.pos_repeat_checking = False  # 위치 도달 확인 중
 
         self._wire_signals()
         atexit.register(self.m.emergency_stop)
@@ -324,12 +327,16 @@ class MainController(QtCore.QObject):
 
     def stop_pos_repeat(self):
         self.v.pos_repeat_timer.stop()
+        self.pos_repeat_checking = False
         self.v.btnPosRepeatStart.setEnabled(True)
         self.v.btnPosRepeatStop.setEnabled(False)
         self.v.lblPosRepeatStatus.setText("Stopped")
         self.v.lblPosRepeatStatus.setStyleSheet("color: red; font-weight: bold;")
 
     def pos_repeat_step(self):
+        # 이전 체크 상태 초기화 (타임아웃으로 인한 재진입 대응)
+        self.pos_repeat_checking = False
+        
         if self.pos_repeat_count >= self.pos_repeat_max:
             self.stop_pos_repeat()
             self.v.lblPosRepeatStatus.setText("Completed")
@@ -346,6 +353,14 @@ class MainController(QtCore.QObject):
         cnt_l = -cnt_l
         cnt_r = -cnt_r
         cnt_l, cnt_r = self.apply_hw_invert(cnt_l, cnt_r)
+        
+        # 목표 위치 저장 (절대 위치 계산)
+        current_pos_l = self.m.fb.get('pl', 0)
+        current_pos_r = self.m.fb.get('pr', 0)
+        self.pos_repeat_target_l = current_pos_l + cnt_l
+        self.pos_repeat_target_r = current_pos_r + cnt_r
+        self.pos_repeat_checking = True
+        
         self.m.queue(self.m.worker.cmd_write_pos_and_start, cnt_l, cnt_r, spd, spd)
 
         if not self.pos_repeat_forward:
@@ -353,14 +368,14 @@ class MainController(QtCore.QObject):
             self.v.lblPosRepeatStatus.setText(f"Running: {self.pos_repeat_count}/{self.pos_repeat_max}")
 
         self.pos_repeat_forward = not self.pos_repeat_forward
-
-        # Position 이동 시간 추정
+        
+        # 타임아웃 안전장치 (위치 도달 못하면 강제 진행)
         max_cnt = max(abs(cnt_l), abs(cnt_r))
         if spd > 0:
-            estimated_time = (max_cnt / 1000.0) / spd * 60.0 + 1.0
+            timeout = (max_cnt / 1000.0) / spd * 60.0 + 2.0
         else:
-            estimated_time = 3.0
-        self.v.pos_repeat_timer.start(int(estimated_time * 1000))
+            timeout = 3.0
+        self.v.pos_repeat_timer.start(int(timeout * 1000))
 
     # -----------------------
     # Callbacks from Model
@@ -379,3 +394,12 @@ class MainController(QtCore.QObject):
             self.v.lblFbTq.setText(f"Tq: {data['tl']:.1f} / {data['tr']:.1f} A")
         if 'pl' in data and 'pr' in data:
             self.v.lblFbPos.setText(f"Pos: {data['pl']} / {data['pr']}")
+            
+            # Position Repeat 모드에서 위치 도달 확인
+            if self.pos_repeat_checking:
+                tolerance = 100  # 위치 허용 오차 (펄스)
+                if (abs(data['pl'] - self.pos_repeat_target_l) < tolerance and 
+                    abs(data['pr'] - self.pos_repeat_target_r) < tolerance):
+                    # 목표 위치 도달! 다음 스텝 실행
+                    self.pos_repeat_checking = False
+                    QtCore.QTimer.singleShot(50, self.pos_repeat_step)
