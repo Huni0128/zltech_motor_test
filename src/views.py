@@ -237,13 +237,24 @@ class MainWindow(QtWidgets.QMainWindow):
 
         fb_layout = QtWidgets.QHBoxLayout()
         self.lblFbVel = QtWidgets.QLabel("Vel: 0.0 / 0.0 rpm")
+        
+        # Position 피드백 (펄스 + mm)
+        pos_vbox = QtWidgets.QVBoxLayout()
         self.lblFbPos = QtWidgets.QLabel("Pos: 0 / 0 cnt")
+        self.lblFbPosMM = QtWidgets.QLabel("(0.0 / 0.0 mm)")
+        self.lblFbPosMM.setStyleSheet("color: #666; font-size: 9pt;")
+        pos_vbox.addWidget(self.lblFbPos)
+        pos_vbox.addWidget(self.lblFbPosMM)
+        pos_vbox.setSpacing(0)
+        
         self.lblFbTq = QtWidgets.QLabel("Tq: 0.0 / 0.0 A")
         font = self.lblFbVel.font()
         font.setPointSize(10)
         font.setBold(True)
         self.lblFbVel.setFont(font); self.lblFbPos.setFont(font); self.lblFbTq.setFont(font)
-        fb_layout.addWidget(self.lblFbVel); fb_layout.addWidget(self.lblFbPos); fb_layout.addWidget(self.lblFbTq)
+        fb_layout.addWidget(self.lblFbVel)
+        fb_layout.addLayout(pos_vbox)
+        fb_layout.addWidget(self.lblFbTq)
         layout.addLayout(fb_layout)
 
         h_reset = QtWidgets.QHBoxLayout()

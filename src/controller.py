@@ -393,7 +393,13 @@ class MainController(QtCore.QObject):
         if 'tl' in data and 'tr' in data:
             self.v.lblFbTq.setText(f"Tq: {data['tl']:.1f} / {data['tr']:.1f} A")
         if 'pl' in data and 'pr' in data:
-            self.v.lblFbPos.setText(f"Pos: {data['pl']} / {data['pr']}")
+            self.v.lblFbPos.setText(f"Pos: {data['pl']} / {data['pr']} cnt")
+            
+            # mm로 환산하여 표시
+            scale = self.v.prScale.value()  # 1000펄스당 mm
+            mm_l = data['pl'] * scale / 1000.0
+            mm_r = data['pr'] * scale / 1000.0
+            self.v.lblFbPosMM.setText(f"({mm_l:.1f} / {mm_r:.1f} mm)")
             
             # Position Repeat 모드에서 위치 도달 확인
             if self.pos_repeat_checking:
