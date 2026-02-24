@@ -18,6 +18,7 @@ class MotorWorker(QtCore.QThread):
         self.is_connected = False
         self.cmd_queue = []
         self.mutex = QtCore.QMutex()
+        self.feedback_counter = 0  # 피드백 읽기 주기 제어
 
     def connect_serial(self, port, baud, slave):
         self.cfg.port = port
@@ -47,7 +48,7 @@ class MotorWorker(QtCore.QThread):
                 parity='N',
                 stopbits=1,
                 bytesize=8,
-                timeout=0.1
+                timeout=0.05  # 타임아웃 단축
             )
             if self.client.connect():
                 self.is_connected = True
@@ -66,17 +67,30 @@ class MotorWorker(QtCore.QThread):
             return
 
         while self.running:
-            self._drain_commands()
-            try:
-                if self.is_connected:
-                    self._read_status()
-            except Exception:
-                pass
-            self.msleep(100)
+            # 명령이 있으면 즉시 처리
+            has_commands = self._drain_commands()
+            
+            # 피드백은 5회에 1번만 읽기 (50ms 주기)
+            if not has_commands:
+                self.feedback_counter += 1
+                if self.feedback_counter >= 5:
+                    self.feedback_counter = 0
+                    try:
+                        if self.is_connected:
+                            self._read_status()
+                    except Exception:
+                        pass
+            
+            # 명령이 있으면 sleep 없이 즉시 다음 루프, 없으면 10ms 대기
+            if not has_commands:
+                self.msleep
+        return has_commands(10)
 
     def _drain_commands(self):
+        has_commands = False
         self.mutex.lock()
         while self.cmd_queue:
+            has_commands = True
             func, args, kwargs = self.cmd_queue.pop(0)
             try:
                 func(*args, **kwargs)

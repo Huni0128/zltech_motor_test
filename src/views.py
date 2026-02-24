@@ -46,10 +46,10 @@ class VirtualJoystick(QtWidgets.QWidget):
         self.snap_threshold = 0.2
         self.current_l = 0.0
         self.current_r = 0.0
-        self.ramp_step = 5.0
+        self.ramp_step = 50.0  # 빠른 응답을 위해 증가
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.emit_speed)
-        self.timer.start(100)
+        self.timer.start(30)  # 30ms로 단축하여 즉시 반응
 
     def set_max_rpm(self, val):
         self.max_rpm = val
