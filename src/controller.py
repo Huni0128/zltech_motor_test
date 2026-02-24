@@ -1,5 +1,8 @@
 # controller.py
 import atexit
+import csv
+from datetime import datetime
+from pathlib import Path
 from PyQt5 import QtCore
 
 from .model import MotorModel
@@ -22,6 +25,12 @@ class MainController(QtCore.QObject):
         self.pos_repeat_target_l = 0  # 목표 위치 추적
         self.pos_repeat_target_r = 0
         self.pos_repeat_checking = False  # 위치 도달 확인 중
+        
+        # CSV 로깅
+        self.csv_file = None
+        self.csv_writer = None
+        self.log_folder = Path("logs")
+        self.log_folder.mkdir(exist_ok=True)
 
         self._wire_signals()
         atexit.register(self.m.emergency_stop)
@@ -250,6 +259,56 @@ class MainController(QtCore.QObject):
         self.m.queue(self.m.worker.cmd_write_torque, tl, tr)
 
     # -----------------------
+    # CSV 로깅
+    # -----------------------
+    def start_csv_logging(self, mode_name):
+        """CSV 로깅 시작"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = self.log_folder / f"{mode_name}_repeat_{timestamp}.csv"
+        self.csv_file = open(filename, 'w', newline='', encoding='utf-8')
+        self.csv_writer = csv.writer(self.csv_file)
+        # 헤더 작성
+        self.csv_writer.writerow([
+            'Timestamp', 'Event', 'RepeatCount',
+            'PosL_cnt', 'PosR_cnt', 'PosL_mm', 'PosR_mm',
+            'VelL_rpm', 'VelR_rpm', 'TorqueL_A', 'TorqueR_A'
+        ])
+        self.csv_file.flush()
+        self.v.lblStatus.setText(f"📊 Logging to: {filename.name}")
+    
+    def log_csv_data(self, event_type, repeat_count=0):
+        """CSV에 데이터 기록"""
+        if self.csv_writer is None:
+            return
+        
+        fb = self.m.fb
+        scale = self.v.prScale.value()
+        pos_l_mm = fb.get('pl', 0) * scale / 1000.0
+        pos_r_mm = fb.get('pr', 0) * scale / 1000.0
+        
+        self.csv_writer.writerow([
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+            event_type,
+            repeat_count,
+            fb.get('pl', 0),
+            fb.get('pr', 0),
+            f"{pos_l_mm:.2f}",
+            f"{pos_r_mm:.2f}",
+            f"{fb.get('vl', 0):.1f}",
+            f"{fb.get('vr', 0):.1f}",
+            f"{fb.get('tl', 0):.1f}",
+            f"{fb.get('tr', 0):.1f}"
+        ])
+        self.csv_file.flush()
+    
+    def stop_csv_logging(self):
+        """CSV 로깅 종료"""
+        if self.csv_file:
+            self.csv_file.close()
+            self.csv_file = None
+            self.csv_writer = None
+
+    # -----------------------
     # Joystick
     # -----------------------
     def update_joystick_settings(self):
@@ -276,6 +335,11 @@ class MainController(QtCore.QObject):
         self.v.btnVelRepeatStop.setEnabled(True)
         self.v.lblVelRepeatStatus.setText(f"Running: 0/{self.vel_repeat_max}")
         self.v.lblVelRepeatStatus.setStyleSheet("color: green; font-weight: bold;")
+        
+        # CSV 로깅 시작
+        self.start_csv_logging("velocity")
+        self.log_csv_data("START", 0)
+        
         self.vel_repeat_step()
 
     def stop_vel_repeat(self):
@@ -285,12 +349,18 @@ class MainController(QtCore.QObject):
         self.v.btnVelRepeatStop.setEnabled(False)
         self.v.lblVelRepeatStatus.setText("Stopped")
         self.v.lblVelRepeatStatus.setStyleSheet("color: red; font-weight: bold;")
+        
+        # CSV 로깅 종료
+        self.log_csv_data("STOPPED", self.vel_repeat_count)
+        self.stop_csv_logging()
 
     def vel_repeat_step(self):
         if self.vel_repeat_count >= self.vel_repeat_max:
             self.stop_vel_repeat()
             self.v.lblVelRepeatStatus.setText("Completed")
             self.v.lblVelRepeatStatus.setStyleSheet("color: blue; font-weight: bold;")
+            self.log_csv_data("COMPLETED", self.vel_repeat_count)
+            self.stop_csv_logging()
             return
 
         vl, vr = self.v.vL.value(), self.v.vR.value()
@@ -305,6 +375,8 @@ class MainController(QtCore.QObject):
         if not self.vel_repeat_forward:
             self.vel_repeat_count += 1
             self.v.lblVelRepeatStatus.setText(f"Running: {self.vel_repeat_count}/{self.vel_repeat_max}")
+            # 도착 시점 로깅
+            self.log_csv_data("ARRIVED", self.vel_repeat_count)
 
         self.vel_repeat_forward = not self.vel_repeat_forward
         self.v.vel_repeat_timer.start(int(self.v.vRepeatTime.value() * 1000))
@@ -323,6 +395,11 @@ class MainController(QtCore.QObject):
         self.v.btnPosRepeatStop.setEnabled(True)
         self.v.lblPosRepeatStatus.setText(f"Running: 0/{self.pos_repeat_max}")
         self.v.lblPosRepeatStatus.setStyleSheet("color: green; font-weight: bold;")
+        
+        # CSV 로깅 시작
+        self.start_csv_logging("position")
+        self.log_csv_data("START", 0)
+        
         self.pos_repeat_step()
 
     def stop_pos_repeat(self):
@@ -332,6 +409,10 @@ class MainController(QtCore.QObject):
         self.v.btnPosRepeatStop.setEnabled(False)
         self.v.lblPosRepeatStatus.setText("Stopped")
         self.v.lblPosRepeatStatus.setStyleSheet("color: red; font-weight: bold;")
+        
+        # CSV 로깅 종료
+        self.log_csv_data("STOPPED", self.pos_repeat_count)
+        self.stop_csv_logging()
 
     def pos_repeat_step(self):
         # 이전 체크 상태 초기화 (타임아웃으로 인한 재진입 대응)
@@ -341,6 +422,8 @@ class MainController(QtCore.QObject):
             self.stop_pos_repeat()
             self.v.lblPosRepeatStatus.setText("Completed")
             self.v.lblPosRepeatStatus.setStyleSheet("color: blue; font-weight: bold;")
+            self.log_csv_data("COMPLETED", self.pos_repeat_count)
+            self.stop_csv_logging()
             return
 
         val_l, val_r = self.v.prPosL.value(), self.v.prPosR.value()
@@ -406,6 +489,7 @@ class MainController(QtCore.QObject):
                 tolerance = 100  # 위치 허용 오차 (펄스)
                 if (abs(data['pl'] - self.pos_repeat_target_l) < tolerance and 
                     abs(data['pr'] - self.pos_repeat_target_r) < tolerance):
-                    # 목표 위치 도달! 다음 스텝 실행
+                    # 목표 위치 도달! 데이터 로깅 후 다음 스텝 실행
                     self.pos_repeat_checking = False
+                    self.log_csv_data("ARRIVED", self.pos_repeat_count)
                     QtCore.QTimer.singleShot(50, self.pos_repeat_step)
