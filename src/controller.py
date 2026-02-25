@@ -86,7 +86,7 @@ class MainController(QtCore.QObject):
     # Event Filter (키 처리)
     # -----------------------
     def eventFilter(self, obj, event):
-        if obj is self.v and self.v.tabs.currentIndex() == 2:
+        if obj is self.v and self.v.tabs.currentIndex() == 3:
             if event.type() == QtCore.QEvent.KeyPress:
                 self._on_key_press(event)
             elif event.type() == QtCore.QEvent.KeyRelease:
@@ -106,6 +106,7 @@ class MainController(QtCore.QObject):
         elif key == QtCore.Qt.Key_Space:
             self.v.joystick.stop_immediate()
             self.v.joystick.update_keys(0, 0, 0, 0)
+            self.v.lblStatus.setText("Emergency Stop!")
 
     def _on_key_release(self, event):
         key = event.key()
@@ -366,11 +367,16 @@ class MainController(QtCore.QObject):
         self.v.joystick.set_max_rpm(self.v.joyLimit.value())
 
     def on_joystick_move(self, l_rpm, r_rpm):
-        if self.v.tabs.currentIndex() == 2 and self.v.btnRun.isChecked():
-            l_rpm = -l_rpm
-            r_rpm = -r_rpm
-            final_l, final_r = self.apply_hw_invert(l_rpm, r_rpm)
-            self.m.queue(self.m.worker.cmd_write_vel, final_l, final_r)
+        if self.v.tabs.currentIndex() != 3:
+            return  # Not on joystick tab
+        if not self.v.btnRun.isChecked():
+            if l_rpm != 0 or r_rpm != 0:
+                self.v.lblStatus.setText("Press RUN first!")
+            return
+        l_rpm = -l_rpm
+        r_rpm = -r_rpm
+        final_l, final_r = self.apply_hw_invert(l_rpm, r_rpm)
+        self.m.queue(self.m.worker.cmd_write_vel, final_l, final_r)
 
     # -----------------------
     # Repeat: Velocity
