@@ -187,15 +187,18 @@ class MainController(QtCore.QObject):
         if not self.m.is_connected:
             port = self.v.portEdit.text()
             baud = int(self.v.baudCombo.currentText())
+            self.v.logOutput.appendPlainText(f"[USER] Connecting to {port} @ {baud}...")
             self.m.connect_serial(port, baud, 1)
             self.v.btnConn.setText("Disconnect")
             # 연결 후 현재 탭에 맞는 모드로 초기화 (약간의 지연 후)
             QtCore.QTimer.singleShot(500, lambda: self.on_tab_changed(self.v.tabs.currentIndex()))
         else:
+            self.v.logOutput.appendPlainText("[USER] Disconnecting...")
             self.m.disconnect_serial()
             self.v.btnConn.setText("Connect")
 
     def on_run_clicked(self):
+        self.v.logOutput.appendPlainText(f"[USER] RUN button: {'ON' if self.v.btnRun.isChecked() else 'OFF'}")
         self.m.queue(self.m.worker.cmd_enable, self.v.btnRun.isChecked())
 
     def on_stop_clicked(self):
@@ -233,6 +236,8 @@ class MainController(QtCore.QObject):
         vl = -vl
         vr = -vr
         vl, vr = self.apply_hw_invert(vl, vr)
+        self.v.lblStatus.setText(f"Sending velocity: L={vl}, R={vr}")
+        self.v.logOutput.appendPlainText(f"[USER] Send Velocity: L={vl}, R={vr}")
         self.m.queue(self.m.worker.cmd_write_vel, vl, vr)
 
     def send_position(self, is_absolute):
@@ -522,9 +527,11 @@ class MainController(QtCore.QObject):
     # -----------------------
     def _on_status(self, msg):
         self.v.lblStatus.setText(msg)
+        self.v.logOutput.appendPlainText(f"[STATUS] {msg}")
 
     def _on_error(self, msg):
         self.v.lblStatus.setText(f"Error: {msg}")
+        self.v.logOutput.appendPlainText(f"[ERROR] {msg}")
 
     def _on_feedback(self, data):
         # Feedback labels

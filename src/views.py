@@ -1,6 +1,10 @@
 # views.py
 import math
 from PyQt5 import QtCore, QtWidgets, QtGui
+try:
+    from serial.tools import list_ports
+except ImportError:
+    list_ports = None
 
 
 class KeyPadWidget(QtWidgets.QWidget):
@@ -83,8 +87,8 @@ class VirtualJoystick(QtWidgets.QWidget):
         painter.setBrush(QtGui.QColor(50, 50, 50))
         painter.drawEllipse(center, radius, radius)
         painter.setPen(QtGui.QPen(QtCore.Qt.gray, 1, QtCore.Qt.DashLine))
-        painter.drawLine(center.x() - radius, center.y(), center.x() + radius, center.y())
-        painter.drawLine(center.x(), center.y() - radius, center.x(), center.y() + radius)
+        painter.drawLine(int(center.x() - radius), int(center.y()), int(center.x() + radius), int(center.y()))
+        painter.drawLine(int(center.x()), int(center.y() - radius), int(center.x()), int(center.y() + radius))
 
         curr_x = self.pos_x if self.moving else self.key_x
         curr_y = self.pos_y if self.moving else self.key_y
@@ -185,6 +189,25 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ---- UI 구성 ----
         self._build_ui()
+    
+    def _detect_motor_port(self):
+        """QinHeng Electronics USB Serial 장치 자동 탐지"""
+        if not list_ports:
+            return "/dev/ttyACM0"
+        
+        ports = list_ports.comports()
+        for port in ports:
+            # QinHeng Electronics (Vendor ID: 1a86)
+            if port.vid == 0x1a86:
+                print(f"Motor port detected: {port.device} - {port.description}")
+                return port.device
+            # 또는 제품 설명에서 확인
+            if "QinHeng" in (port.manufacturer or "") or "CH340" in (port.description or "") or "CH341" in (port.description or ""):
+                print(f"Motor port detected: {port.device} - {port.description}")
+                return port.device
+        
+        # 못 찾으면 기본값
+        return "/dev/ttyACM0"
 
     def _build_ui(self):
         central = QtWidgets.QWidget()
@@ -193,7 +216,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # 1) Connection
         h = QtWidgets.QHBoxLayout()
-        self.portEdit = QtWidgets.QLineEdit("COM3")
+        detected_port = self._detect_motor_port()
+        self.portEdit = QtWidgets.QLineEdit(detected_port)
         self.baudCombo = QtWidgets.QComboBox()
         self.baudCombo.addItems(["115200", "57600", "38400", "9600"])
         self.btnConn = QtWidgets.QPushButton("Connect")
@@ -266,6 +290,14 @@ class MainWindow(QtWidgets.QMainWindow):
         h_reset.addWidget(self.btnResetPos)
         h_reset.addStretch()
         layout.addLayout(h_reset)
+
+        # Log output
+        self.logOutput = QtWidgets.QPlainTextEdit()
+        self.logOutput.setReadOnly(True)
+        self.logOutput.setMaximumHeight(150)
+        self.logOutput.setStyleSheet("background-color: #f0f0f0; font-family: monospace; font-size: 9pt;")
+        layout.addWidget(QtWidgets.QLabel("Log:"))
+        layout.addWidget(self.logOutput)
 
         self.lblStatus = QtWidgets.QLabel("Disconnected")
         layout.addWidget(self.lblStatus)

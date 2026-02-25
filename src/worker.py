@@ -37,10 +37,12 @@ class MotorWorker(QtCore.QThread):
     def queue_command(self, func, *args, **kwargs):
         self.mutex.lock()
         self.cmd_queue.append((func, args, kwargs))
+        self.sig_status.emit(f"Command queued: {func.__name__}")
         self.mutex.unlock()
 
     def run(self):
         self.running = True
+        self.sig_status.emit(f"Connecting to {self.cfg.port} @ {self.cfg.baudrate} baud...")
         try:
             self.client = ModbusSerialClient(
                 port=self.cfg.port,
@@ -51,6 +53,8 @@ class MotorWorker(QtCore.QThread):
                 timeout=0.05  # 타임아웃 단축
             )
             if self.client.connect():
+                # Set slave ID for all subsequent calls
+                self.client.slave_id = self.cfg.slave
                 self.is_connected = True
                 self.sig_status.emit(f"Connected to {self.cfg.port}")
 
@@ -83,8 +87,7 @@ class MotorWorker(QtCore.QThread):
             
             # 명령이 있으면 sleep 없이 즉시 다음 루프, 없으면 10ms 대기
             if not has_commands:
-                self.msleep
-        return has_commands(10)
+                self.msleep(10)
 
     def _drain_commands(self):
         has_commands = False
@@ -92,20 +95,22 @@ class MotorWorker(QtCore.QThread):
         while self.cmd_queue:
             has_commands = True
             func, args, kwargs = self.cmd_queue.pop(0)
+            self.mutex.unlock()
             try:
                 func(*args, **kwargs)
             except Exception as e:
                 self.sig_error.emit(f"CMD Error: {e}")
+            self.mutex.lock()
         self.mutex.unlock()
+        return has_commands
 
     def _write(self, addr, val):
-        self.client.write_register(addr, int(val) & 0xFFFF, slave=self.cfg.slave)
+        self.client.write_register(addr, int(val) & 0xFFFF)
 
     def _write_multi(self, addr, vals):
         self.client.write_registers(
             addr,
-            [int(v) & 0xFFFF for v in vals],
-            slave=self.cfg.slave
+            [int(v) & 0xFFFF for v in vals]
         )
 
     def _s16(self, val):
@@ -117,20 +122,19 @@ class MotorWorker(QtCore.QThread):
 
     def _read_status(self):
         fb = {}
-        slave = self.cfg.slave
 
         try:
-            rr = self.client.read_holding_registers(REG.ACT_VEL_L, 2, slave=slave)
+            rr = self.client.read_holding_registers(REG.ACT_VEL_L, 2)
             if not rr.isError():
                 fb['vl'] = self._s16(rr.registers[0]) / 10.0
                 fb['vr'] = self._s16(rr.registers[1]) / 10.0
 
-            rr = self.client.read_holding_registers(REG.APOS_H_L, 4, slave=slave)
+            rr = self.client.read_holding_registers(REG.APOS_H_L, 4)
             if not rr.isError():
                 fb['pl'] = self._s32(rr.registers[0], rr.registers[1])
                 fb['pr'] = self._s32(rr.registers[2], rr.registers[3])
 
-            rr = self.client.read_holding_registers(REG.ATORQUE_L, 2, slave=slave)
+            rr = self.client.read_holding_registers(REG.ATORQUE_L, 2)
             if not rr.isError():
                 fb['tl'] = self._s16(rr.registers[0]) / 10.0
                 fb['tr'] = self._s16(rr.registers[1]) / 10.0
@@ -143,10 +147,14 @@ class MotorWorker(QtCore.QThread):
     # Commands
     # --------------------
     def cmd_enable(self, enable: bool):
+        self.sig_status.emit(f"Enable command: {enable}")
         self._write(REG.CONTROL_WORD, 0x08 if enable else 0x07)
+        self.sig_status.emit(f"Enable {'ON' if enable else 'OFF'} done")
 
     def cmd_clear_fault(self):
+        self.sig_status.emit("Clearing fault...")
         self._write(REG.CONTROL_WORD, 0x06)
+        self.sig_status.emit("Fault cleared")
 
     def _safe_change_mode(self, mode, sync_val=1):
         self._write(REG.CONTROL_WORD, 0x07); self.msleep(50)
@@ -157,11 +165,14 @@ class MotorWorker(QtCore.QThread):
         self._write(REG.CONTROL_WORD, 0x08)
 
     def cmd_set_mode_vel(self, acc, dec):
+        self.sig_status.emit(f"Setting velocity mode (acc={acc}, dec={dec})")
         self._safe_change_mode(3, 1)
         self._write(REG.ACC_L, acc); self._write(REG.ACC_R, acc)
         self._write(REG.DEC_L, dec); self._write(REG.DEC_R, dec)
+        self.sig_status.emit("Velocity mode ready")
 
     def cmd_write_vel(self, vl, vr):
+        self.sig_status.emit(f"Writing velocity: L={vl}, R={vr}")
         self._write(REG.TARGET_VEL_L, int(vl))
         self._write(REG.TARGET_VEL_R, int(vr))
 

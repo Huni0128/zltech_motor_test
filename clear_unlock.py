@@ -29,10 +29,14 @@ def autodetect_ports():
         for k in ["USB","CH340","CP210","FTDI","PL2303"]:
             if k in t: pri-=10
         return (pri,p.device)
-    return [p.device for p in sorted(list_ports.comports(), key=score)]
+    detected = [p.device for p in sorted(list_ports.comports(), key=score)]
+    if detected:
+        return detected
+    # Fallback to common Linux serial ports
+    return ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyACM0", "/dev/ttyACM1"]
 
 def open_client(baud):
-    cands = autodetect_ports() or [f"COM{i}" for i in range(3,11)]
+    cands = autodetect_ports()
     for dev in cands:
         cli=ModbusSerialClient(method="rtu", port=dev, baudrate=baud, bytesize=8, parity='N', stopbits=1,
                                timeout=2.0, retries=3, retry_on_empty=True, strict=False)
@@ -43,13 +47,13 @@ def open_client(baud):
     print("포트 없음"); return None, None
 
 def r_u16(c,a,u):
-    rr=c.read_holding_registers(a,1,slave=u)
+    rr=c.read_holding_registers(a,1,u)
     if rr.isError(): raise ModbusException(rr)
     return rr.registers[0] & 0xFFFF
 def r_i16(c,a,u):
     v=r_u16(c,a,u); return v-0x10000 if v & 0x8000 else v
 def w_u16(c,a,v,u):
-    rq=c.write_register(a, v & 0xFFFF, slave=u)
+    rq=c.write_register(a, v & 0xFFFF, u)
     if rq.isError(): raise ModbusException(rq)
 def r_i32(c,ah,al,u):
     hi=r_i16(c,ah,u); lo=r_i16(c,al,u)

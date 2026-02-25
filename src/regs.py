@@ -28,6 +28,6 @@ class REG:
 
 @dataclass
 class SerialCfg:
-    port: str = "COM3"
+    port: str = ""
     baudrate: int = 115200
     slave: int = 1
