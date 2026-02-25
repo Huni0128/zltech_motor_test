@@ -124,23 +124,25 @@ class MotorWorker(QtCore.QThread):
         fb = {}
 
         try:
-            rr = self.client.read_holding_registers(REG.ACT_VEL_L, 2)
-            if not rr.isError():
+            rr = self.client.read_holding_registers(REG.ACT_VEL_L, count=2)
+            if rr and not rr.isError():
                 fb['vl'] = self._s16(rr.registers[0]) / 10.0
                 fb['vr'] = self._s16(rr.registers[1]) / 10.0
 
-            rr = self.client.read_holding_registers(REG.APOS_H_L, 4)
-            if not rr.isError():
+            rr = self.client.read_holding_registers(REG.APOS_H_L, count=4)
+            if rr and not rr.isError():
                 fb['pl'] = self._s32(rr.registers[0], rr.registers[1])
                 fb['pr'] = self._s32(rr.registers[2], rr.registers[3])
 
-            rr = self.client.read_holding_registers(REG.ATORQUE_L, 2)
-            if not rr.isError():
+            rr = self.client.read_holding_registers(REG.ATORQUE_L, count=2)
+            if rr and not rr.isError():
                 fb['tl'] = self._s16(rr.registers[0]) / 10.0
                 fb['tr'] = self._s16(rr.registers[1]) / 10.0
 
-            self.sig_feedback.emit(fb)
-        except Exception:
+            if fb:  # Only emit if we got some data
+                self.sig_feedback.emit(fb)
+        except Exception as e:
+            # Silently ignore read errors in normal operation
             pass
 
     # --------------------

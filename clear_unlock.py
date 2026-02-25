@@ -41,19 +41,20 @@ def open_client(baud):
         cli=ModbusSerialClient(method="rtu", port=dev, baudrate=baud, bytesize=8, parity='N', stopbits=1,
                                timeout=2.0, retries=3, retry_on_empty=True, strict=False)
         if cli.connect():
+            cli.slave_id = 1  # Set default slave ID
             print(f"🔌 연결 성공: {dev} @ {baud}bps"); return cli, dev
         try: cli.close()
         except: pass
     print("포트 없음"); return None, None
 
 def r_u16(c,a,u):
-    rr=c.read_holding_registers(a,1,u)
+    rr=c.read_holding_registers(a,count=1)
     if rr.isError(): raise ModbusException(rr)
     return rr.registers[0] & 0xFFFF
 def r_i16(c,a,u):
     v=r_u16(c,a,u); return v-0x10000 if v & 0x8000 else v
 def w_u16(c,a,v,u):
-    rq=c.write_register(a, v & 0xFFFF, u)
+    rq=c.write_register(a, v & 0xFFFF)
     if rq.isError(): raise ModbusException(rq)
 def r_i32(c,ah,al,u):
     hi=r_i16(c,ah,u); lo=r_i16(c,al,u)
