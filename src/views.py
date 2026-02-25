@@ -416,6 +416,27 @@ class MainWindow(QtWidgets.QMainWindow):
         l.addRow("Wheelbase:", self.rotateWheelbase)
         l.addRow(self.btnRotateGo)
         
+        l.addRow(QtWidgets.QLabel("===== Repeat Mode ====="))
+        self.rotateRepeatCount = QtWidgets.QSpinBox()
+        self.rotateRepeatCount.setRange(1, 1000)
+        self.rotateRepeatCount.setValue(5)
+        self.rotateRepeatCount.setSuffix(" times")
+        l.addRow("Repeat Count:", self.rotateRepeatCount)
+        
+        h_repeat = QtWidgets.QHBoxLayout()
+        self.btnRotateRepeatStart = QtWidgets.QPushButton("▶ Start Repeat")
+        self.btnRotateRepeatStart.setStyleSheet("background-color: #90EE90; font-weight: bold;")
+        self.btnRotateRepeatStop = QtWidgets.QPushButton("⏹ Stop Repeat")
+        self.btnRotateRepeatStop.setStyleSheet("background-color: #FFB6C1; font-weight: bold;")
+        self.btnRotateRepeatStop.setEnabled(False)
+        h_repeat.addWidget(self.btnRotateRepeatStart)
+        h_repeat.addWidget(self.btnRotateRepeatStop)
+        l.addRow(h_repeat)
+        
+        self.lblRotateRepeatStatus = QtWidgets.QLabel("Ready")
+        self.lblRotateRepeatStatus.setStyleSheet("color: gray; font-weight: bold;")
+        l.addRow("Status:", self.lblRotateRepeatStatus)
+        
         return w
 
     def _ui_graphic(self):

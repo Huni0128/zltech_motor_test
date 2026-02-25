@@ -22,9 +22,14 @@ class MainController(QtCore.QObject):
         self.pos_repeat_count = 0
         self.pos_repeat_max = 0
         self.pos_repeat_forward = True
-        self.pos_repeat_target_l = 0  # 목표 위치 추적
-        self.pos_repeat_target_r = 0
-        self.pos_repeat_checking = False  # 위치 도달 확인 중
+        self.pos_repeat_checking = False  # velocity 0 확인 중
+        self.pos_repeat_moving = False  # 모터가 실제로 움직이기 시작했는지 확인
+        
+        self.rotate_repeat_count = 0
+        self.rotate_repeat_max = 0
+        self.rotate_repeat_forward = True  # True=정방향, False=역방향
+        self.rotate_repeat_checking = False  # velocity 0 확인 중
+        self.rotate_repeat_moving = False  # 모터가 실제로 움직이기 시작했는지 확인
         
         # CSV 로깅
         self.csv_file = None
@@ -73,6 +78,8 @@ class MainController(QtCore.QObject):
         # rotate
         self.v.btnRotateGo.clicked.connect(self.send_rotation)
         self.v.rotateAngle.lineEdit().returnPressed.connect(self.send_rotation)
+        self.v.btnRotateRepeatStart.clicked.connect(self.start_rotate_repeat)
+        self.v.btnRotateRepeatStop.clicked.connect(self.stop_rotate_repeat)
 
         # joystick
         self.v.joyLimit.valueChanged.connect(self.update_joystick_settings)
@@ -304,6 +311,8 @@ class MainController(QtCore.QObject):
         # 하드웨어 반전 적용
         cnt_l, cnt_r = self.apply_hw_invert(cnt_l, cnt_r)
         
+        self.v.logOutput.appendPlainText(f"[ROTATE] Angle={angle}°, L={cnt_l}, R={cnt_r} pulses")
+        
         # Relative Position 모드로 전환 후 이동
         self.m.queue(self.m.worker.cmd_set_mode_pos, False, self.v.prAcc.value(), self.v.prAcc.value())
         self.m.queue(self.m.worker.cmd_write_pos_and_start, cnt_l, cnt_r, speed, speed)
@@ -464,6 +473,7 @@ class MainController(QtCore.QObject):
         except:
             pass
         self.pos_repeat_checking = False
+        self.pos_repeat_moving = False
         self.v.btnPosRepeatStart.setEnabled(True)
         self.v.btnPosRepeatStop.setEnabled(False)
         self.v.lblPosRepeatStatus.setText("Stopped")
@@ -476,6 +486,7 @@ class MainController(QtCore.QObject):
     def pos_repeat_step(self):
         # 이전 체크 상태 초기화 (타임아웃으로 인한 재진입 대응)
         self.pos_repeat_checking = False
+        self.pos_repeat_moving = False
         
         if self.pos_repeat_count >= self.pos_repeat_max:
             self.v.lblPosRepeatStatus.setText("Completed")
@@ -495,19 +506,11 @@ class MainController(QtCore.QObject):
         cnt_r = -cnt_r
         cnt_l, cnt_r = self.apply_hw_invert(cnt_l, cnt_r)
         
-        # 목표 위치 저장 (절대 위치 계산)
-        current_pos_l = self.m.fb.get('pl', 0)
-        current_pos_r = self.m.fb.get('pr', 0)
-        self.pos_repeat_target_l = current_pos_l + cnt_l
-        self.pos_repeat_target_r = current_pos_r + cnt_r
-        
-        # 위치 도달 확인 활성화 (이제 encoder로만 확인)
+        # velocity 0 확인 활성화 (모터 움직임 확인부터 시작)
         self.pos_repeat_checking = True
+        self.pos_repeat_moving = False
         
-        # 명령 전송 시점 로깅
-        direction = "FORWARD" if self.pos_repeat_forward else "BACKWARD"
-        self.log_csv_data(f"MOVE_{direction}", self.pos_repeat_count)
-        
+        # 명령 전송
         self.m.queue(self.m.worker.cmd_write_pos_and_start, cnt_l, cnt_r, spd, spd)
 
         self.pos_repeat_forward = not self.pos_repeat_forward
@@ -529,6 +532,83 @@ class MainController(QtCore.QObject):
             self.stop_pos_repeat()
 
     # -----------------------
+    # Repeat: Rotate
+    # -----------------------
+    def start_rotate_repeat(self):
+        if not self.check_run():
+            return
+        self.rotate_repeat_count = 0
+        self.rotate_repeat_max = self.v.rotateRepeatCount.value()
+        self.rotate_repeat_forward = True
+
+        self.v.btnRotateRepeatStart.setEnabled(False)
+        self.v.btnRotateRepeatStop.setEnabled(True)
+        self.v.lblRotateRepeatStatus.setText(f"Running: 0/{self.rotate_repeat_max}")
+        self.v.lblRotateRepeatStatus.setStyleSheet("color: green; font-weight: bold;")
+
+        # CSV 로깅 시작
+        self.start_csv_logging("rotate")
+        self.log_csv_data("START", 0)
+
+        # 첫 번째 회전 시작
+        self.rotate_repeat_step()
+
+    def stop_rotate_repeat(self):
+        self.rotate_repeat_checking = False
+        self.rotate_repeat_moving = False
+        self.v.btnRotateRepeatStart.setEnabled(True)
+        self.v.btnRotateRepeatStop.setEnabled(False)
+        self.v.lblRotateRepeatStatus.setText("Stopped")
+        self.v.lblRotateRepeatStatus.setStyleSheet("color: red; font-weight: bold;")
+        self.log_csv_data("STOPPED", self.rotate_repeat_count)
+        self.stop_csv_logging()
+
+    def rotate_repeat_step(self):
+        """Rotate repeat 한 사이클 실행"""
+        # 이전 체크 상태 초기화
+        self.rotate_repeat_checking = False
+        self.rotate_repeat_moving = False
+        
+        if self.rotate_repeat_count >= self.rotate_repeat_max:
+            self.v.lblRotateRepeatStatus.setText("Completed")
+            self.v.lblRotateRepeatStatus.setStyleSheet("color: blue; font-weight: bold;")
+            self.log_csv_data("COMPLETED", self.rotate_repeat_count)
+            self.stop_rotate_repeat()
+            return
+
+        # 각도 설정 (정방향/역방향)
+        base_angle = self.v.rotateAngle.value()
+        angle = base_angle if self.rotate_repeat_forward else -base_angle
+        speed = self.v.rotateSpeed.value()
+
+        # 회전 거리 계산
+        import math
+        wheelbase = self.v.rotateWheelbase.value()
+        arc_length = abs(angle) * math.pi / 180.0 * wheelbase / 2.0
+        scale = self.v.prScale.value()
+        pulse_distance = int(arc_length * 1000.0 / scale)
+
+        if angle > 0:
+            cnt_l = -pulse_distance
+            cnt_r = pulse_distance
+        else:
+            cnt_l = pulse_distance
+            cnt_r = -pulse_distance
+
+        cnt_l, cnt_r = self.apply_hw_invert(cnt_l, cnt_r)
+        
+        # velocity 0 확인 활성화 (모터 움직임 확인부터 시작)
+        self.rotate_repeat_checking = True
+        self.rotate_repeat_moving = False
+
+        # 명령 전송
+        self.m.queue(self.m.worker.cmd_set_mode_pos, False, self.v.prAcc.value(), self.v.prAcc.value())
+        self.m.queue(self.m.worker.cmd_write_pos_and_start, cnt_l, cnt_r, speed, speed)
+
+        # 방향 토글은 다음 사이클을 위해 미리 전환
+        self.rotate_repeat_forward = not self.rotate_repeat_forward
+
+    # -----------------------
     # Callbacks from Model
     # -----------------------
     def _on_status(self, msg):
@@ -543,6 +623,58 @@ class MainController(QtCore.QObject):
         # Feedback labels
         if 'vl' in data and 'vr' in data:
             self.v.lblFbVel.setText(f"Vel: {data['vl']:.1f} / {data['vr']:.1f} rpm")
+            
+            # Position Repeat 모드에서 velocity 0 확인
+            if self.pos_repeat_checking:
+                vel_l = abs(data['vl'])
+                vel_r = abs(data['vr'])
+                
+                # Step 1: 모터가 실제로 움직이기 시작했는지 확인 (5 rpm 이상)
+                if not self.pos_repeat_moving:
+                    if vel_l > 5 or vel_r > 5:
+                        self.pos_repeat_moving = True
+                # Step 2: 움직이기 시작한 후 멈춤 감지 (velocity 0)
+                elif vel_l <= 0 and vel_r <= 0:
+                    self.pos_repeat_checking = False
+                    self.pos_repeat_moving = False
+                    self.v.pos_repeat_timer.stop()  # 타임아웃 타이머 정지
+                    
+                    # CSV 로깅 및 카운트 업데이트
+                    direction = "FORWARD" if not self.pos_repeat_forward else "BACKWARD"
+                    self.log_csv_data(direction, self.pos_repeat_count)
+                    
+                    if self.pos_repeat_forward:  # 방금 후진 완료
+                        self.pos_repeat_count += 1
+                        self.v.lblPosRepeatStatus.setText(f"Running: {self.pos_repeat_count}/{self.pos_repeat_max}")
+                    
+                    # 다음 스텝 실행 (짧은 딜레이)
+                    QtCore.QTimer.singleShot(100, self.pos_repeat_step)
+            
+            # Rotate Repeat 모드에서 velocity 0 확인
+            if self.rotate_repeat_checking:
+                vel_l = abs(data['vl'])
+                vel_r = abs(data['vr'])
+                
+                # Step 1: 모터가 실제로 움직이기 시작했는지 확인 (5 rpm 이상)
+                if not self.rotate_repeat_moving:
+                    if vel_l > 5 or vel_r > 5:
+                        self.rotate_repeat_moving = True
+                # Step 2: 움직이기 시작한 후 멈춤 감지 (velocity 0)
+                elif vel_l <= 0 and vel_r <= 0:
+                    self.rotate_repeat_checking = False
+                    self.rotate_repeat_moving = False
+                    
+                    # CSV 로깅 및 카운트 업데이트
+                    direction = "CLOCKWISE" if not self.rotate_repeat_forward else "COUNTER_CLOCKWISE"
+                    self.log_csv_data(direction, self.rotate_repeat_count)
+                    
+                    if self.rotate_repeat_forward:  # 방금 역방향 완료
+                        self.rotate_repeat_count += 1
+                        self.v.lblRotateRepeatStatus.setText(f"Running: {self.rotate_repeat_count}/{self.rotate_repeat_max}")
+                    
+                    # 다음 스텝 실행 (짧은 딜레이)
+                    QtCore.QTimer.singleShot(100, self.rotate_repeat_step)
+                    
         if 'tl' in data and 'tr' in data:
             self.v.lblFbTq.setText(f"Tq: {data['tl']:.1f} / {data['tr']:.1f} A")
         if 'pl' in data and 'pr' in data:
@@ -553,26 +685,3 @@ class MainController(QtCore.QObject):
             mm_l = data['pl'] * scale / 1000.0
             mm_r = data['pr'] * scale / 1000.0
             self.v.lblFbPosMM.setText(f"({mm_l:.1f} / {mm_r:.1f} mm)")
-            
-            # Position Repeat 모드에서 위치 도달 확인
-            if self.pos_repeat_checking:
-                # ±2mm 오차로 tolerance 계산
-                scale = self.v.prScale.value()  # 1000펄스당 mm
-                tolerance_mm = 2.0  # ±2mm
-                tolerance_pulse = int(tolerance_mm * 1000.0 / scale)
-                
-                error_l = abs(data['pl'] - self.pos_repeat_target_l)
-                error_r = abs(data['pr'] - self.pos_repeat_target_r)
-                
-                if error_l <= tolerance_pulse and error_r <= tolerance_pulse:
-                    # 목표 위치 정확히 도달!
-                    self.pos_repeat_checking = False
-                    self.v.pos_repeat_timer.stop()  # 타임아웃 타이머 정지
-                    
-                    # 카운트 업데이트 (후진 완료 시에만)
-                    if self.pos_repeat_forward:  # 방금 후진 완료
-                        self.pos_repeat_count += 1
-                        self.v.lblPosRepeatStatus.setText(f"Running: {self.pos_repeat_count}/{self.pos_repeat_max}")
-                    
-                    # 다음 스텝 실행 (짧은 딜레이)
-                    QtCore.QTimer.singleShot(50, self.pos_repeat_step)
