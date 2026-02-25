@@ -232,7 +232,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs = QtWidgets.QTabWidget()
         self.tabs.addTab(self._ui_velocity(), "1. Velocity")
         self.tabs.addTab(self._ui_position_rel(), "2. Relative Pos")
-        self.tabs.addTab(self._ui_graphic(), "3. Joy & Key")
+        self.tabs.addTab(self._ui_rotate(), "3. Rotate Test")
+        self.tabs.addTab(self._ui_graphic(), "4. Joy & Key")
         layout.addWidget(self.tabs)
 
         fb_layout = QtWidgets.QHBoxLayout()
@@ -258,7 +259,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addLayout(fb_layout)
 
         h_reset = QtWidgets.QHBoxLayout()
-        self.btnResetPos = QtWidgets.QPushButton("🔄 Reset Position (Set 0/0)")
+        self.btnResetPos = QtWidgets.QPushButton("Reset Position (Set 0/0)")
         self.btnResetPos.setMinimumHeight(40)
         self.btnResetPos.setStyleSheet("background-color: #FFD700; font-weight: bold; color: black;")
         h_reset.addStretch()
@@ -350,6 +351,39 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lblPosRepeatStatus = QtWidgets.QLabel("Ready")
         self.lblPosRepeatStatus.setStyleSheet("color: gray; font-weight: bold;")
         l.addRow("Status:", self.lblPosRepeatStatus)
+        return w
+
+    def _ui_rotate(self):
+        w = QtWidgets.QWidget()
+        l = QtWidgets.QFormLayout(w)
+
+        l.addRow(QtWidgets.QLabel("Rotate Test Mode (Auto-activated)"))
+        
+        # 회전 파라미터
+        self.rotateSpeed = QtWidgets.QSpinBox()
+        self.rotateSpeed.setRange(10, 500)
+        self.rotateSpeed.setValue(10)
+        self.rotateSpeed.setSuffix(" rpm")
+        
+        self.rotateAngle = QtWidgets.QSpinBox()
+        self.rotateAngle.setRange(-360, 360)
+        self.rotateAngle.setValue(90)
+        self.rotateAngle.setSuffix(" deg")
+        
+        self.rotateWheelbase = QtWidgets.QDoubleSpinBox()
+        self.rotateWheelbase.setRange(10.0, 1000.0)
+        self.rotateWheelbase.setValue(750.0)
+        self.rotateWheelbase.setSuffix(" mm")
+        self.rotateWheelbase.setToolTip("Distance between left and right wheels")
+        
+        self.btnRotateGo = QtWidgets.QPushButton("Rotate [Enter]")
+        self.btnRotateGo.setStyleSheet("background-color: #FFE4B5; font-weight: bold;")
+        
+        l.addRow("Rotation Speed:", self.rotateSpeed)
+        l.addRow("Rotation Angle:", self.rotateAngle)
+        l.addRow("Wheelbase:", self.rotateWheelbase)
+        l.addRow(self.btnRotateGo)
+        
         return w
 
     def _ui_graphic(self):

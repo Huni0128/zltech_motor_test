@@ -68,7 +68,11 @@ class MainController(QtCore.QObject):
         self.v.prPosR.lineEdit().returnPressed.connect(lambda: self.send_position(False))
         self.v.btnPosRepeatStart.clicked.connect(self.start_pos_repeat)
         self.v.btnPosRepeatStop.clicked.connect(self.stop_pos_repeat)
-        self.v.pos_repeat_timer.timeout.connect(self.pos_repeat_step)
+        # pos_repeat_timer는 동적으로 연결/해제 (encoder 기반)
+
+        # rotate
+        self.v.btnRotateGo.clicked.connect(self.send_rotation)
+        self.v.rotateAngle.lineEdit().returnPressed.connect(self.send_rotation)
 
         # joystick
         self.v.joyLimit.valueChanged.connect(self.update_joystick_settings)
@@ -169,7 +173,10 @@ class MainController(QtCore.QObject):
         elif index == 1:  # Relative Pos
             self.init_relative_mode()
             self.v.lblStatus.setText("Relative Position Mode Activated")
-        elif index == 2:  # Joystick
+        elif index == 2:  # Rotate
+            self.init_velocity_mode()
+            self.v.lblStatus.setText("Rotate Mode Activated (Velocity)")
+        elif index == 3:  # Joystick
             self.init_velocity_mode()
             self.v.lblStatus.setText("Joystick Mode Activated (Velocity)")
 
@@ -258,6 +265,45 @@ class MainController(QtCore.QObject):
         tl, tr = self.apply_hw_invert(tl, tr)
         self.m.queue(self.m.worker.cmd_write_torque, tl, tr)
 
+    def send_rotation(self):
+        """제자리 회전 (relative position 사용)"""
+        if not self.check_run():
+            return
+        
+        angle = self.v.rotateAngle.value()  # deg
+        speed = self.v.rotateSpeed.value()  # rpm
+        
+        if angle == 0:
+            self.m.sig_status.emit("Rotation angle is zero")
+            return
+        
+        # 회전 거리 계산: arc_length = |angle| * π/180 * wheelbase / 2
+        import math
+        wheelbase = self.v.rotateWheelbase.value()  # mm
+        arc_length = abs(angle) * math.pi / 180.0 * wheelbase / 2.0  # mm
+        
+        # pulse로 변환
+        scale = self.v.prScale.value()  # mm당 1000 pulse 기준
+        pulse_distance = int(arc_length * 1000.0 / scale)
+        
+        # 양수 각도 = 시계방향 = 왼쪽 뒤로(-), 오른쪽 앞으로(+)
+        # 음수 각도 = 반시계방향 = 왼쪽 앞으로(+), 오른쪽 뒤로(-)
+        if angle > 0:
+            cnt_l = -pulse_distance
+            cnt_r = pulse_distance
+        else:
+            cnt_l = pulse_distance
+            cnt_r = -pulse_distance
+        
+        # 하드웨어 반전 적용
+        cnt_l, cnt_r = self.apply_hw_invert(cnt_l, cnt_r)
+        
+        # Relative Position 모드로 전환 후 이동
+        self.m.queue(self.m.worker.cmd_set_mode_pos, False, self.v.prAcc.value(), self.v.prAcc.value())
+        self.m.queue(self.m.worker.cmd_write_pos_and_start, cnt_l, cnt_r, speed, speed)
+        
+        self.m.sig_status.emit(f"Rotating {angle}° at {speed} rpm (L:{cnt_l}, R:{cnt_r} pulses)")
+
     # -----------------------
     # CSV 로깅
     # -----------------------
@@ -274,7 +320,7 @@ class MainController(QtCore.QObject):
             'VelL_rpm', 'VelR_rpm', 'TorqueL_A', 'TorqueR_A'
         ])
         self.csv_file.flush()
-        self.v.lblStatus.setText(f"📊 Logging to: {filename.name}")
+        self.v.lblStatus.setText(f"Logging to: {filename.name}")
     
     def log_csv_data(self, event_type, repeat_count=0):
         """CSV에 데이터 기록"""
@@ -375,8 +421,6 @@ class MainController(QtCore.QObject):
         if not self.vel_repeat_forward:
             self.vel_repeat_count += 1
             self.v.lblVelRepeatStatus.setText(f"Running: {self.vel_repeat_count}/{self.vel_repeat_max}")
-            # 도착 시점 로깅
-            self.log_csv_data("ARRIVED", self.vel_repeat_count)
 
         self.vel_repeat_forward = not self.vel_repeat_forward
         self.v.vel_repeat_timer.start(int(self.v.vRepeatTime.value() * 1000))
@@ -404,6 +448,10 @@ class MainController(QtCore.QObject):
 
     def stop_pos_repeat(self):
         self.v.pos_repeat_timer.stop()
+        try:
+            self.v.pos_repeat_timer.timeout.disconnect()
+        except:
+            pass
         self.pos_repeat_checking = False
         self.v.btnPosRepeatStart.setEnabled(True)
         self.v.btnPosRepeatStop.setEnabled(False)
@@ -419,11 +467,10 @@ class MainController(QtCore.QObject):
         self.pos_repeat_checking = False
         
         if self.pos_repeat_count >= self.pos_repeat_max:
-            self.stop_pos_repeat()
             self.v.lblPosRepeatStatus.setText("Completed")
             self.v.lblPosRepeatStatus.setStyleSheet("color: blue; font-weight: bold;")
             self.log_csv_data("COMPLETED", self.pos_repeat_count)
-            self.stop_csv_logging()
+            self.stop_pos_repeat()
             return
 
         val_l, val_r = self.v.prPosL.value(), self.v.prPosR.value()
@@ -442,23 +489,33 @@ class MainController(QtCore.QObject):
         current_pos_r = self.m.fb.get('pr', 0)
         self.pos_repeat_target_l = current_pos_l + cnt_l
         self.pos_repeat_target_r = current_pos_r + cnt_r
+        
+        # 위치 도달 확인 활성화 (이제 encoder로만 확인)
         self.pos_repeat_checking = True
+        
+        # 명령 전송 시점 로깅
+        direction = "FORWARD" if self.pos_repeat_forward else "BACKWARD"
+        self.log_csv_data(f"MOVE_{direction}", self.pos_repeat_count)
         
         self.m.queue(self.m.worker.cmd_write_pos_and_start, cnt_l, cnt_r, spd, spd)
 
-        if not self.pos_repeat_forward:
-            self.pos_repeat_count += 1
-            self.v.lblPosRepeatStatus.setText(f"Running: {self.pos_repeat_count}/{self.pos_repeat_max}")
-
         self.pos_repeat_forward = not self.pos_repeat_forward
         
-        # 타임아웃 안전장치 (위치 도달 못하면 강제 진행)
-        max_cnt = max(abs(cnt_l), abs(cnt_r))
-        if spd > 0:
-            timeout = (max_cnt / 1000.0) / spd * 60.0 + 2.0
-        else:
-            timeout = 3.0
-        self.v.pos_repeat_timer.start(int(timeout * 1000))
+        # 타이머는 안전장치로만 사용 (10초 타임아웃)
+        self.v.pos_repeat_timer.stop()
+        try:
+            self.v.pos_repeat_timer.timeout.disconnect()
+        except:
+            pass
+        self.v.pos_repeat_timer.timeout.connect(self._pos_repeat_timeout)
+        self.v.pos_repeat_timer.start(10000)  # 10초 타임아웃
+
+    def _pos_repeat_timeout(self):
+        """Position repeat 타임아웃 (안전장치)"""
+        if self.pos_repeat_checking:
+            self.log_csv_data("TIMEOUT_ERROR", self.pos_repeat_count)
+            self.v.lblStatus.setText("⚠️ Position timeout! Check connection.")
+            self.stop_pos_repeat()
 
     # -----------------------
     # Callbacks from Model
@@ -486,10 +543,23 @@ class MainController(QtCore.QObject):
             
             # Position Repeat 모드에서 위치 도달 확인
             if self.pos_repeat_checking:
-                tolerance = 100  # 위치 허용 오차 (펄스)
-                if (abs(data['pl'] - self.pos_repeat_target_l) < tolerance and 
-                    abs(data['pr'] - self.pos_repeat_target_r) < tolerance):
-                    # 목표 위치 도달! 데이터 로깅 후 다음 스텝 실행
+                # ±2mm 오차로 tolerance 계산
+                scale = self.v.prScale.value()  # 1000펄스당 mm
+                tolerance_mm = 2.0  # ±2mm
+                tolerance_pulse = int(tolerance_mm * 1000.0 / scale)
+                
+                error_l = abs(data['pl'] - self.pos_repeat_target_l)
+                error_r = abs(data['pr'] - self.pos_repeat_target_r)
+                
+                if error_l <= tolerance_pulse and error_r <= tolerance_pulse:
+                    # 목표 위치 정확히 도달!
                     self.pos_repeat_checking = False
-                    self.log_csv_data("ARRIVED", self.pos_repeat_count)
+                    self.v.pos_repeat_timer.stop()  # 타임아웃 타이머 정지
+                    
+                    # 카운트 업데이트 (후진 완료 시에만)
+                    if self.pos_repeat_forward:  # 방금 후진 완료
+                        self.pos_repeat_count += 1
+                        self.v.lblPosRepeatStatus.setText(f"Running: {self.pos_repeat_count}/{self.pos_repeat_max}")
+                    
+                    # 다음 스텝 실행 (짧은 딜레이)
                     QtCore.QTimer.singleShot(50, self.pos_repeat_step)
